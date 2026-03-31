@@ -1,781 +1,615 @@
-import asyncio
+import os
 import json
 import logging
-import os
-import sqlite3
-from contextlib import closing
 from pathlib import Path
-from typing import Any, Optional
+from typing import Dict, List, Any
 
-from aiogram import Bot, Dispatcher, F, Router
-from aiogram.client.default import DefaultBotProperties
-from aiogram.enums import ChatType, ParseMode
-from aiogram.filters import Command, CommandStart
-from aiogram.fsm.context import FSMContext
-from aiogram.fsm.state import State, StatesGroup
-from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram import Bot, Dispatcher, Router, F
+from aiogram.enums import ParseMode
+from aiogram.filters import Command
 from aiogram.types import (
-    CallbackQuery,
-    InlineKeyboardMarkup,
-    KeyboardButton,
-    Message,
-    ReplyKeyboardMarkup,
+    Message, CallbackQuery,
+    ReplyKeyboardMarkup, KeyboardButton,
+    InlineKeyboardMarkup, InlineKeyboardButton,
     ReplyKeyboardRemove,
 )
-from aiogram.utils.keyboard import InlineKeyboardBuilder
-
-BASE_DIR = Path(__file__).resolve().parent
-DB_PATH = BASE_DIR / "bot.db"
-BOOKS_PATH = BASE_DIR / "books.json"
-
-BOT_TOKEN = os.getenv("BOT_TOKEN", "")
-ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "abdullayevv_tm").lstrip("@")
-ADMIN_USER_ID = int(os.getenv("ADMIN_USER_ID", "0") or 0)
-BRAND_NAME = os.getenv("BRAND_NAME", "KitobStoreUz")
-PAYMENT_CARD = os.getenv("PAYMENT_CARD", "5614 6814 0959 5364")
-PAYMENT_OWNER = os.getenv("PAYMENT_OWNER", "Abdullayev Saidaxmad")
-PAYMENT_METHOD_NAME = os.getenv("PAYMENT_METHOD_NAME", "Payme")
+from aiogram.client.default import DefaultBotProperties
+from aiogram.fsm.state import StatesGroup, State
+from aiogram.fsm.context import FSMContext
 
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-router = Router()
+
+BASE_DIR = Path(__file__).resolve().parent
+BOOKS_FILE = BASE_DIR / "books.json"
+USERS_FILE = BASE_DIR / "users.json"
+ORDERS_FILE = BASE_DIR / "orders.json"
+
+BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
+ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "abdullayevv_tm").lstrip("@").strip()
+PAYMENT_CARD = os.getenv("PAYMENT_CARD", "5614 6814 0959 5364").strip()
+CARD_HOLDER = os.getenv("CARD_HOLDER", "Abdullayev Saidaxmad").strip()
+BRAND_NAME = os.getenv("BRAND_NAME", "KitobStoreUz").strip()
+
+if not BOT_TOKEN:
+    raise RuntimeError("BOT_TOKEN topilmadi. Railway Variables ichiga BOT_TOKEN qo'shing.")
 
 
-class OrderStates(StatesGroup):
-    waiting_name = State()
-    waiting_phone = State()
-    waiting_address = State()
-    waiting_payment = State()
-    waiting_receipt = State()
+def ensure_file(path: Path, default_data: Any):
+    if not path.exists():
+        path.write_text(json.dumps(default_data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-class ContactStates(StatesGroup):
-    waiting_message = State()
+ensure_file(BOOKS_FILE, [])
+ensure_file(USERS_FILE, {})
+ensure_file(ORDERS_FILE, [])
 
 
-class AdminAddBookStates(StatesGroup):
-    waiting_photo = State()
-    waiting_title = State()
-    waiting_price = State()
-    waiting_description = State()
+def load_json(path: Path, default: Any):
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return default
 
 
-class AdminDeleteBookStates(StatesGroup):
-    waiting_book_id = State()
+def save_json(path: Path, data: Any):
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-KEYWORDS = {"narx", "bormi", "buyurtma", "yetkazib", "admin", "kitob kerak", "olmoqchi", "sotib", "payme"}
+def load_books() -> List[Dict]:
+    return load_json(BOOKS_FILE, [])
 
 
-def init_db() -> None:
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS settings (
-                key TEXT PRIMARY KEY,
-                value TEXT NOT NULL
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS orders (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER NOT NULL,
-                username TEXT,
-                tg_name TEXT,
-                book_id INTEGER,
-                book_title TEXT NOT NULL,
-                price INTEGER NOT NULL,
-                customer_name TEXT NOT NULL,
-                phone TEXT NOT NULL,
-                address TEXT NOT NULL,
-                payment_type TEXT NOT NULL,
-                receipt_file_id TEXT,
-                status TEXT NOT NULL DEFAULT 'new',
-                created_at TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                full_name TEXT,
-                last_seen TEXT DEFAULT CURRENT_TIMESTAMP
-            )
-            """
-        )
-        conn.commit()
+def save_books(data: List[Dict]):
+    save_json(BOOKS_FILE, data)
 
 
-def track_user(message: Message) -> None:
-    user = message.from_user
-    if not user:
-        return
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        conn.execute(
-            """
-            INSERT INTO users(user_id, username, full_name, last_seen)
-            VALUES(?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(user_id) DO UPDATE SET
-              username=excluded.username,
-              full_name=excluded.full_name,
-              last_seen=CURRENT_TIMESTAMP
-            """,
-            (user.id, user.username, user.full_name),
-        )
-        conn.commit()
+def load_users() -> Dict[str, Dict]:
+    return load_json(USERS_FILE, {})
 
 
-def set_setting(key: str, value: str) -> None:
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        conn.execute(
-            "INSERT INTO settings(key, value) VALUES(?, ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-            (key, value),
-        )
-        conn.commit()
+def save_users(data: Dict[str, Dict]):
+    save_json(USERS_FILE, data)
 
 
-def get_setting(key: str) -> Optional[str]:
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        row = conn.execute("SELECT value FROM settings WHERE key=?", (key,)).fetchone()
-        return row[0] if row else None
+def load_orders() -> List[Dict]:
+    return load_json(ORDERS_FILE, [])
 
 
-def load_books() -> list[dict[str, Any]]:
-    if not BOOKS_PATH.exists():
-        return []
-    with open(BOOKS_PATH, "r", encoding="utf-8") as f:
-        data = json.load(f)
-    if not isinstance(data, list):
-        return []
-    return data
+def save_orders(data: List[Dict]):
+    save_json(ORDERS_FILE, data)
 
 
-def save_books(books: list[dict[str, Any]]) -> None:
-    with open(BOOKS_PATH, "w", encoding="utf-8") as f:
-        json.dump(books, f, ensure_ascii=False, indent=2)
+TEXTS = {
+    "uz": {
+        "choose_lang": "Tilni tanlang:",
+        "lang_set": "✅ Til o‘rnatildi: O‘zbekcha",
+        "welcome": (
+            f"📚 Assalomu alaykum!\n\n"
+            f"Siz {BRAND_NAME} botidasiz 👋\n\n"
+            f"Bu yerda siz:\n"
+            f"🧠 Fikrni o‘zgartiradigan kitoblar\n"
+            f"💸 Qulay narxlar\n"
+            f"🚚 Tez yetkazib berish\n\n"
+            f"👇 Quyidagi tugmalardan foydalaning:"
+        ),
+        "books": "📚 Kitoblar",
+        "order": "🛒 Buyurtma berish",
+        "payment": "💳 To‘lov",
+        "delivery": "🚚 Yetkazib berish",
+        "contact": "📩 Murojaat",
+        "admin": "👨‍💼 Admin",
+        "no_books": "📚 Hozircha kitoblar qo‘shilmagan.",
+        "choose_book": "Quyidagilardan birini tanlang:",
+        "buy": "🛒 Sotib olish",
+        "order_need_books": "🛒 Buyurtma uchun avval kitob qo‘shilishi kerak.",
+        "payment_info": (
+            "💳 To‘lov usullari:\n\n"
+            "• Payme\n"
+            "• Naqd\n\n"
+            "Buyurtma jarayonida to‘lov turi tanlanadi."
+        ),
+        "delivery_info": "🚚 Yetkazib berish:\n\n📍 Toshkent: 1 kun\n📦 Viloyatlar: 1-3 kun",
+        "contact_prompt": "✍️ Xabaringizni yuboring. Men uni adminga yetkazaman.",
+        "contact_sent": "✅ Xabaringiz adminga yuborildi.",
+        "admin_only": "⛔ Bu bo‘lim faqat admin uchun.",
+        "admin_panel": "⚙️ Admin panel",
+        "add_book": "➕ Kitob qo‘shish",
+        "delete_book": "🗑 Kitob o‘chirish",
+        "book_list": "📚 Kitoblar ro‘yxati",
+        "orders": "📦 Buyurtmalar",
+        "stats": "📊 Statistika",
+        "normal_menu": "🏠 Oddiy menyu",
+        "send_book_name": "Kitob nomini yuboring:",
+        "send_book_price": "Narxini yuboring (faqat raqam):",
+        "send_book_photo": "Endi kitob rasmini yuboring. Agar rasm bo‘lmasa /skip yozing.",
+        "book_saved": "✅ Kitob qo‘shildi.",
+        "bad_price": "❗ Narxni faqat raqam bilan yuboring. Masalan: 50000",
+        "choose_delete_book": "O‘chirmoqchi bo‘lgan kitobni tanlang:",
+        "book_deleted": "🗑 Kitob o‘chirildi.",
+        "no_orders": "📦 Hozircha buyurtmalar yo‘q.",
+        "stats_text": "📊 Statistika:\n\n👥 Foydalanuvchilar: {users}\n📚 Kitoblar: {books}\n📦 Buyurtmalar: {orders}",
+        "enter_name": "👤 Ismingizni yuboring:",
+        "enter_phone": "📞 Telefon raqamingizni yuboring:",
+        "choose_payment": "💳 To‘lov turini tanlang:",
+        "payme": "💳 Payme",
+        "cash": "💵 Naqd",
+        "order_confirmed": "✅ Buyurtmangiz qabul qilindi. Tez orada siz bilan bog‘lanamiz.",
+        "payme_info": (
+            "💳 Online to‘lov\n\n"
+            f"Karta: {PAYMENT_CARD}\n"
+            f"Qabul qiluvchi: {CARD_HOLDER}\n\n"
+            "✅ To‘lov qilgandan keyin chek skrinshotini yuboring."
+        ),
+        "start_over": "🔄 Qayta boshlash uchun /start ni bosing.",
+    },
+    "ru": {
+        "choose_lang": "Выберите язык:",
+        "lang_set": "✅ Язык установлен: Русский",
+        "welcome": (
+            f"📚 Добро пожаловать!\n\n"
+            f"Вы в боте {BRAND_NAME} 👋\n\n"
+            f"Здесь вы найдете:\n"
+            f"🧠 Книги, меняющие мышление\n"
+            f"💸 Доступные цены\n"
+            f"🚚 Быстрая доставка\n\n"
+            f"👇 Используйте кнопки ниже:"
+        ),
+        "books": "📚 Книги",
+        "order": "🛒 Заказать",
+        "payment": "💳 Оплата",
+        "delivery": "🚚 Доставка",
+        "contact": "📩 Связаться",
+        "admin": "👨‍💼 Админ",
+        "no_books": "📚 Пока книги не добавлены.",
+        "choose_book": "Выберите одну из книг:",
+        "buy": "🛒 Купить",
+        "order_need_books": "🛒 Сначала нужно добавить книги.",
+        "payment_info": (
+            "💳 Способы оплаты:\n\n"
+            "• Payme\n"
+            "• Наличные\n\n"
+            "Способ оплаты выбирается во время заказа."
+        ),
+        "delivery_info": "🚚 Доставка:\n\n📍 Ташкент: 1 день\n📦 Регионы: 1-3 дня",
+        "contact_prompt": "✍️ Отправьте ваше сообщение. Я передам его админу.",
+        "contact_sent": "✅ Сообщение отправлено админу.",
+        "admin_only": "⛔ Этот раздел только для администратора.",
+        "admin_panel": "⚙️ Админ-панель",
+        "add_book": "➕ Добавить книгу",
+        "delete_book": "🗑 Удалить книгу",
+        "book_list": "📚 Список книг",
+        "orders": "📦 Заказы",
+        "stats": "📊 Статистика",
+        "normal_menu": "🏠 Обычное меню",
+        "send_book_name": "Отправьте название книги:",
+        "send_book_price": "Отправьте цену (только цифры):",
+        "send_book_photo": "Теперь отправьте фото книги. Если фото нет, отправьте /skip.",
+        "book_saved": "✅ Книга добавлена.",
+        "bad_price": "❗ Отправьте цену только цифрами. Например: 50000",
+        "choose_delete_book": "Выберите книгу для удаления:",
+        "book_deleted": "🗑 Книга удалена.",
+        "no_orders": "📦 Заказов пока нет.",
+        "stats_text": "📊 Статистика:\n\n👥 Пользователи: {users}\n📚 Книги: {books}\n📦 Заказы: {orders}",
+        "enter_name": "👤 Отправьте ваше имя:",
+        "enter_phone": "📞 Отправьте номер телефона:",
+        "choose_payment": "💳 Выберите способ оплаты:",
+        "payme": "💳 Payme",
+        "cash": "💵 Наличные",
+        "order_confirmed": "✅ Ваш заказ принят. Мы скоро с вами свяжемся.",
+        "payme_info": (
+            "💳 Онлайн-оплата\n\n"
+            f"Карта: {PAYMENT_CARD}\n"
+            f"Получатель: {CARD_HOLDER}\n\n"
+            "✅ После оплаты отправьте скриншот чека."
+        ),
+        "start_over": "🔄 Чтобы начать заново, нажмите /start.",
+    },
+}
 
 
-def next_book_id(books: list[dict[str, Any]]) -> int:
-    return max((int(book.get("id", 0)) for book in books), default=0) + 1
+def users_db():
+    return load_users()
 
 
-def get_book(book_id: int) -> Optional[dict[str, Any]]:
-    for book in load_books():
-        if int(book.get("id", 0)) == book_id:
-            return book
-    return None
+def get_lang(user_id: int) -> str:
+    users = users_db()
+    return users.get(str(user_id), {}).get("lang", "uz")
 
 
-def delete_book(book_id: int) -> bool:
-    books = load_books()
-    new_books = [b for b in books if int(b.get("id", 0)) != book_id]
-    if len(new_books) == len(books):
-        return False
-    save_books(new_books)
-    return True
+def set_lang(user_id: int, lang: str):
+    users = users_db()
+    item = users.get(str(user_id), {})
+    item["lang"] = lang
+    users[str(user_id)] = item
+    save_users(users)
+
+
+def remember_user(message: Message):
+    users = users_db()
+    users[str(message.from_user.id)] = {
+        "username": message.from_user.username or "",
+        "full_name": message.from_user.full_name or "",
+        "lang": users.get(str(message.from_user.id), {}).get("lang", "uz"),
+    }
+    save_users(users)
+
+
+def tr(user_id: int, key: str, **kwargs) -> str:
+    text = TEXTS[get_lang(user_id)][key]
+    return text.format(**kwargs) if kwargs else text
 
 
 def is_admin(message: Message) -> bool:
-    username_ok = bool(message.from_user.username and message.from_user.username.lower() == ADMIN_USERNAME.lower())
-    id_ok = bool(ADMIN_USER_ID and message.from_user.id == ADMIN_USER_ID)
-    return username_ok or id_ok
+    return (message.from_user.username or "").lstrip("@").lower() == ADMIN_USERNAME.lower()
 
 
-def main_menu() -> ReplyKeyboardMarkup:
+def language_kb():
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="🇺🇿 O‘zbekcha"), KeyboardButton(text="🇷🇺 Русский")]],
+        resize_keyboard=True
+    )
+
+
+def main_menu(user_id: int):
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="📚 Kitoblar"), KeyboardButton(text="🛒 Buyurtma berish")],
-            [KeyboardButton(text="💳 To'lov"), KeyboardButton(text="📩 Murojaat")],
-            [KeyboardButton(text="🚚 Yetkazib berish"), KeyboardButton(text="👨‍💼 Admin bilan bog'lanish")],
+            [KeyboardButton(text=tr(user_id, "books")), KeyboardButton(text=tr(user_id, "order"))],
+            [KeyboardButton(text=tr(user_id, "payment")), KeyboardButton(text=tr(user_id, "delivery"))],
+            [KeyboardButton(text=tr(user_id, "contact")), KeyboardButton(text=tr(user_id, "admin"))],
         ],
-        resize_keyboard=True,
+        resize_keyboard=True
     )
 
 
-def admin_menu() -> ReplyKeyboardMarkup:
+def admin_menu(user_id: int):
     return ReplyKeyboardMarkup(
         keyboard=[
-            [KeyboardButton(text="➕ Kitob qo'shish"), KeyboardButton(text="🗑 Kitob o'chirish")],
-            [KeyboardButton(text="📚 Kitoblar ro'yxati"), KeyboardButton(text="📦 Buyurtmalar")],
-            [KeyboardButton(text="📊 Statistika"), KeyboardButton(text="🏠 Oddiy menyu")],
+            [KeyboardButton(text=tr(user_id, "add_book")), KeyboardButton(text=tr(user_id, "delete_book"))],
+            [KeyboardButton(text=tr(user_id, "book_list")), KeyboardButton(text=tr(user_id, "orders"))],
+            [KeyboardButton(text=tr(user_id, "stats")), KeyboardButton(text=tr(user_id, "normal_menu"))],
         ],
-        resize_keyboard=True,
+        resize_keyboard=True
     )
 
 
-def books_keyboard() -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    for book in load_books():
-        kb.button(text=f"📖 {book['title']}", callback_data=f"view_book:{book['id']}")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def book_card_keyboard(book_id: int) -> InlineKeyboardMarkup:
-    kb = InlineKeyboardBuilder()
-    kb.button(text="🛒 Sotib olish", callback_data=f"buy:{book_id}")
-    kb.button(text="⬅️ Orqaga", callback_data="books_back")
-    kb.adjust(1)
-    return kb.as_markup()
-
-
-def payment_keyboard() -> ReplyKeyboardMarkup:
+def payment_choice_kb(user_id: int):
     return ReplyKeyboardMarkup(
-        keyboard=[
-            [KeyboardButton(text="💳 Payme"), KeyboardButton(text="💵 Naqd")],
-            [KeyboardButton(text="❌ Bekor qilish")],
-        ],
-        resize_keyboard=True,
-        one_time_keyboard=True,
+        keyboard=[[KeyboardButton(text=tr(user_id, "payme")), KeyboardButton(text=tr(user_id, "cash"))]],
+        resize_keyboard=True, one_time_keyboard=True
     )
 
 
-def format_money(value: int) -> str:
-    return f"{value:,}".replace(",", " ")
-
-
-def payment_text(total: int) -> str:
-    return (
-        f"💳 Online to'lov\n\n"
-        f"To'lov usuli: {PAYMENT_METHOD_NAME}\n"
-        f"Karta: {PAYMENT_CARD}\n"
-        f"Qabul qiluvchi: {PAYMENT_OWNER}\n"
-        f"Jami: {format_money(total)} so'm\n\n"
-        f"✅ To'lov qilgandan keyin chek skrinshotini shu botga yuboring."
+def buy_inline_kb(book_id: int, user_id: int):
+    return InlineKeyboardMarkup(
+        inline_keyboard=[[InlineKeyboardButton(text=tr(user_id, "buy"), callback_data=f"buy:{book_id}")]]
     )
 
 
-def save_order(data: dict[str, Any], message: Message) -> int:
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        cur = conn.cursor()
-        cur.execute(
-            """
-            INSERT INTO orders(
-                user_id, username, tg_name, book_id, book_title, price,
-                customer_name, phone, address, payment_type, receipt_file_id, status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                message.from_user.id,
-                message.from_user.username,
-                message.from_user.full_name,
-                data["book_id"],
-                data["book_title"],
-                data["price"],
-                data["customer_name"],
-                data["phone"],
-                data["address"],
-                data["payment_type"],
-                data.get("receipt_file_id"),
-                data.get("status", "new"),
-            ),
-        )
-        conn.commit()
-        return int(cur.lastrowid)
+class ContactState(StatesGroup):
+    waiting_message = State()
 
 
-def order_count() -> int:
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        row = conn.execute("SELECT COUNT(*) FROM orders").fetchone()
-        return int(row[0] if row else 0)
+class AddBookState(StatesGroup):
+    waiting_name = State()
+    waiting_price = State()
+    waiting_photo = State()
 
 
-def user_count() -> int:
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        row = conn.execute("SELECT COUNT(*) FROM users").fetchone()
-        return int(row[0] if row else 0)
+class OrderState(StatesGroup):
+    waiting_name = State()
+    waiting_phone = State()
+    waiting_payment = State()
 
 
-def latest_orders(limit: int = 10) -> list[tuple]:
-    with closing(sqlite3.connect(DB_PATH)) as conn:
-        return conn.execute(
-            """
-            SELECT id, book_title, customer_name, phone, address, payment_type, status, created_at
-            FROM orders ORDER BY id DESC LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+router = Router()
+bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
+dp = Dispatcher()
+dp.include_router(router)
 
 
-async def notify_admin(bot: Bot, text: str) -> None:
-    admin_chat_id = get_setting("admin_chat_id")
-    if admin_chat_id:
-        try:
-            await bot.send_message(int(admin_chat_id), text)
-            return
-        except Exception as e:
-            logger.warning("Admin xabar yuborilmadi: %s", e)
-    if ADMIN_USER_ID:
-        try:
-            await bot.send_message(ADMIN_USER_ID, text)
-        except Exception as e:
-            logger.warning("Fallback admin xabar yuborilmadi: %s", e)
+@router.message(Command("start"))
+async def start_cmd(message: Message, state: FSMContext):
+    remember_user(message)
+    await state.clear()
+    await message.answer("Tilni tanlang / Выберите язык:", reply_markup=language_kb())
 
 
-@router.message(CommandStart())
-async def start_handler(message: Message) -> None:
-    track_user(message)
-    if is_admin(message):
-        set_setting("admin_chat_id", str(message.from_user.id))
-
-    text = (
-        f"Assalomu alaykum! {BRAND_NAME} botiga xush kelibsiz. 📚\n\n"
-        "Bu yerda siz:\n"
-        "• kitoblarni rasm va narxi bilan ko'rasiz\n"
-        "• sotib olish uchun buyurtma qoldirasiz\n"
-        "• murojaat yuborasiz\n\n"
-        f"Admin: @{ADMIN_USERNAME}"
+@router.message(F.text.in_(["🇺🇿 O‘zbekcha", "🇷🇺 Русский"]))
+async def choose_language(message: Message, state: FSMContext):
+    remember_user(message)
+    set_lang(message.from_user.id, "uz" if "O‘zbekcha" in message.text else "ru")
+    await state.clear()
+    await message.answer(
+        tr(message.from_user.id, "lang_set") + "\n\n" + tr(message.from_user.id, "welcome"),
+        reply_markup=main_menu(message.from_user.id)
     )
-    await message.answer(text, reply_markup=main_menu())
 
 
 @router.message(Command("admin"))
-async def admin_handler(message: Message) -> None:
-    track_user(message)
+async def admin_cmd(message: Message, state: FSMContext):
+    remember_user(message)
+    await state.clear()
     if not is_admin(message):
-        await message.answer("Bu buyruq faqat admin uchun.")
+        await message.answer(tr(message.from_user.id, "admin_only"))
         return
-    set_setting("admin_chat_id", str(message.from_user.id))
-    await message.answer("👨‍💼 Admin panel ochildi.", reply_markup=admin_menu())
+    await message.answer(tr(message.from_user.id, "admin_panel"), reply_markup=admin_menu(message.from_user.id))
 
 
-@router.message(F.text == "🏠 Oddiy menyu")
-async def back_user_menu(message: Message, state: FSMContext) -> None:
+@router.message(F.text.func(lambda x: x in ["👨‍💼 Admin", "👨‍💼 Админ"]))
+async def admin_menu_open(message: Message, state: FSMContext):
+    await admin_cmd(message, state)
+
+
+@router.message(F.text.func(lambda x: x in ["🏠 Oddiy menyu", "🏠 Обычное меню"]))
+async def normal_menu_back(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer("Oddiy menyuga qaytdingiz.", reply_markup=main_menu())
+    await message.answer(tr(message.from_user.id, "welcome"), reply_markup=main_menu(message.from_user.id))
 
 
-@router.message(F.text == "📚 Kitoblar")
-async def show_books(message: Message) -> None:
-    track_user(message)
+@router.message(F.text.func(lambda x: x in ["📚 Kitoblar", "📚 Книги"]))
+async def list_books(message: Message):
+    remember_user(message)
     books = load_books()
     if not books:
-        await message.answer("Hozircha kitoblar qo'shilmagan.")
+        await message.answer(tr(message.from_user.id, "no_books"))
         return
-    await message.answer("📚 Mavjud kitoblar:", reply_markup=books_keyboard())
+    await message.answer(tr(message.from_user.id, "choose_book"))
+    for book in books:
+        caption = f"📚 <b>{book['name']}</b>\n💰 {book['price']} so‘m"
+        if book.get("photo_file_id"):
+            await message.answer_photo(photo=book["photo_file_id"], caption=caption, reply_markup=buy_inline_kb(book["id"], message.from_user.id))
+        else:
+            await message.answer(caption, reply_markup=buy_inline_kb(book["id"], message.from_user.id))
 
 
-@router.callback_query(F.data == "books_back")
-async def books_back(callback: CallbackQuery) -> None:
-    await callback.message.answer("📚 Mavjud kitoblar:", reply_markup=books_keyboard())
-    await callback.answer()
-
-
-@router.callback_query(F.data.startswith("view_book:"))
-async def view_book(callback: CallbackQuery) -> None:
-    book_id = int(callback.data.split(":", 1)[1])
-    book = get_book(book_id)
-    if not book:
-        await callback.answer("Kitob topilmadi", show_alert=True)
+@router.message(F.text.func(lambda x: x in ["🛒 Buyurtma berish", "🛒 Заказать"]))
+async def order_entry(message: Message):
+    if not load_books():
+        await message.answer(tr(message.from_user.id, "order_need_books"))
         return
-
-    text = (
-        f"📚 <b>{book['title']}</b>\n"
-        f"💰 Narxi: <b>{format_money(int(book['price']))} so'm</b>\n\n"
-        f"{book.get('description') or 'Izoh kiritilmagan.'}"
-    )
-    if book.get("photo_file_id"):
-        await callback.message.answer_photo(
-            photo=book["photo_file_id"],
-            caption=text,
-            reply_markup=book_card_keyboard(book_id),
-        )
-    else:
-        await callback.message.answer(text, reply_markup=book_card_keyboard(book_id))
-    await callback.answer()
-
-
-@router.message(F.text == "🛒 Buyurtma berish")
-async def buy_entry(message: Message) -> None:
-    track_user(message)
-    books = load_books()
-    if not books:
-        await message.answer("Hozircha buyurtma uchun kitoblar qo'shilmagan.")
-        return
-    await message.answer("Quyidagi kitoblardan birini tanlang:", reply_markup=books_keyboard())
-
-
-async def start_buy_flow(target: Message, state: FSMContext, book_id: int) -> None:
-    book = get_book(book_id)
-    if not book:
-        await target.answer("Kitob topilmadi.")
-        return
-    await state.clear()
-    await state.update_data(book_id=book_id, book_title=book["title"], price=int(book["price"]))
-    await state.set_state(OrderStates.waiting_name)
-    await target.answer(
-        f"🛒 Buyurtma boshladi\n\n📚 Kitob: {book['title']}\n💰 Narx: {format_money(int(book['price']))} so'm\n\nIsm va familiyangizni kiriting:",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    await list_books(message)
 
 
 @router.callback_query(F.data.startswith("buy:"))
-async def buy_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    await start_buy_flow(callback.message, state, int(callback.data.split(":", 1)[1]))
+async def buy_callback(callback: CallbackQuery, state: FSMContext):
+    book_id = int(callback.data.split(":")[1])
+    book = next((b for b in load_books() if b["id"] == book_id), None)
+    if not book:
+        await callback.answer("Book not found", show_alert=True)
+        return
+    await state.set_state(OrderState.waiting_name)
+    await state.update_data(book_id=book_id)
+    await callback.message.answer(tr(callback.from_user.id, "enter_name"), reply_markup=ReplyKeyboardRemove())
     await callback.answer()
 
 
-@router.message(OrderStates.waiting_name)
-async def order_name(message: Message, state: FSMContext) -> None:
+@router.message(OrderState.waiting_name)
+async def order_name(message: Message, state: FSMContext):
     await state.update_data(customer_name=message.text.strip())
-    phone_kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📱 Telefon yuborish", request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True,
-    )
-    await state.set_state(OrderStates.waiting_phone)
-    await message.answer("Telefon raqamingizni yuboring yoki yozib kiriting:", reply_markup=phone_kb)
+    await state.set_state(OrderState.waiting_phone)
+    await message.answer(tr(message.from_user.id, "enter_phone"))
 
 
-@router.message(OrderStates.waiting_phone, F.contact)
-async def order_phone_contact(message: Message, state: FSMContext) -> None:
-    await state.update_data(phone=message.contact.phone_number)
-    await state.set_state(OrderStates.waiting_address)
-    await message.answer("Yetkazib berish manzilini kiriting:", reply_markup=ReplyKeyboardRemove())
-
-
-@router.message(OrderStates.waiting_phone)
-async def order_phone_text(message: Message, state: FSMContext) -> None:
+@router.message(OrderState.waiting_phone)
+async def order_phone(message: Message, state: FSMContext):
     await state.update_data(phone=message.text.strip())
-    await state.set_state(OrderStates.waiting_address)
-    await message.answer("Yetkazib berish manzilini kiriting:", reply_markup=ReplyKeyboardRemove())
+    await state.set_state(OrderState.waiting_payment)
+    await message.answer(tr(message.from_user.id, "choose_payment"), reply_markup=payment_choice_kb(message.from_user.id))
 
 
-@router.message(OrderStates.waiting_address)
-async def order_address(message: Message, state: FSMContext) -> None:
-    await state.update_data(address=message.text.strip())
-    await state.set_state(OrderStates.waiting_payment)
-    await message.answer("To'lov turini tanlang:", reply_markup=payment_keyboard())
+@router.message(OrderState.waiting_payment)
+async def order_payment(message: Message, state: FSMContext):
+    if message.text not in [tr(message.from_user.id, "payme"), tr(message.from_user.id, "cash")]:
+        await message.answer(tr(message.from_user.id, "choose_payment"), reply_markup=payment_choice_kb(message.from_user.id))
+        return
 
-
-@router.message(OrderStates.waiting_payment)
-async def order_payment(message: Message, state: FSMContext, bot: Bot) -> None:
-    payment = message.text.strip()
-    if payment == "❌ Bekor qilish":
+    data = await state.get_data()
+    book = next((b for b in load_books() if b["id"] == data.get("book_id")), None)
+    if not book:
         await state.clear()
-        await message.answer("Jarayon bekor qilindi.", reply_markup=main_menu())
-        return
-    if payment not in {"💳 Payme", "💵 Naqd"}:
-        await message.answer("Iltimos, 💳 Payme yoki 💵 Naqd ni tanlang.", reply_markup=payment_keyboard())
+        await message.answer(tr(message.from_user.id, "start_over"), reply_markup=main_menu(message.from_user.id))
         return
 
-    await state.update_data(payment_type="Payme" if payment == "💳 Payme" else "Naqd")
-    data = await state.get_data()
+    payment_type = "Payme" if "Payme" in message.text else ("Naqd" if get_lang(message.from_user.id) == "uz" else "Наличные")
+    order = {
+        "user_id": message.from_user.id,
+        "username": message.from_user.username or "",
+        "full_name": message.from_user.full_name or "",
+        "customer_name": data.get("customer_name", ""),
+        "phone": data.get("phone", ""),
+        "book_name": book["name"],
+        "price": book["price"],
+        "payment": payment_type,
+    }
+    orders = load_orders()
+    orders.append(order)
+    save_orders(orders)
 
-    if payment == "💳 Payme":
-        await state.set_state(OrderStates.waiting_receipt)
-        await message.answer(payment_text(int(data["price"])), reply_markup=ReplyKeyboardRemove())
-        pre_notice = (
-            "🟡 Yangi Payme buyurtma boshlandi\n\n"
-            f"📚 Kitob: {data['book_title']}\n"
-            f"👤 Mijoz: {data['customer_name']}\n"
-            f"📞 Telefon: {data['phone']}\n"
-            f"📍 Manzil: {data['address']}\n"
-            f"🔗 Username: @{message.from_user.username or 'yoq'}"
-        )
-        await notify_admin(bot, pre_notice)
-        return
-
-    data["status"] = "new"
-    order_id = save_order(data, message)
     admin_text = (
-        f"📦 Yangi buyurtma #{order_id}\n\n"
-        f"📚 Kitob: {data['book_title']}\n"
-        f"💰 Narx: {format_money(int(data['price']))} so'm\n"
-        f"👤 Mijoz: {data['customer_name']}\n"
-        f"📞 Telefon: {data['phone']}\n"
-        f"📍 Manzil: {data['address']}\n"
-        f"💳 To'lov: Naqd\n"
-        f"🔗 Username: @{message.from_user.username or 'yoq'}"
+        f"📦 <b>Yangi buyurtma / Новый заказ</b>\n\n"
+        f"📚 Kitob / Книга: <b>{book['name']}</b>\n"
+        f"💰 Narx / Цена: <b>{book['price']} so‘m</b>\n"
+        f"💳 To‘lov / Оплата: <b>{payment_type}</b>\n"
+        f"👤 Ism / Имя: <b>{data.get('customer_name', '')}</b>\n"
+        f"📞 Telefon / Телефон: <b>{data.get('phone', '')}</b>\n"
+        f"🆔 User: @{message.from_user.username or 'no_username'}"
     )
-    await notify_admin(bot, admin_text)
-    await message.answer(
-        "✅ Buyurtmangiz qabul qilindi. Admin tez orada siz bilan bog'lanadi.",
-        reply_markup=main_menu(),
-    )
+    try:
+        await bot.send_message(chat_id=f"@{ADMIN_USERNAME}", text=admin_text)
+    except Exception:
+        logging.exception("Admin username ga buyurtma yuborilmadi")
+
+    if "Payme" in message.text:
+        await message.answer(tr(message.from_user.id, "payme_info"))
+    await message.answer(tr(message.from_user.id, "order_confirmed"), reply_markup=main_menu(message.from_user.id))
     await state.clear()
 
 
-@router.message(OrderStates.waiting_receipt, F.photo)
-async def order_receipt_photo(message: Message, state: FSMContext, bot: Bot) -> None:
-    data = await state.get_data()
-    data["receipt_file_id"] = message.photo[-1].file_id
-    data["status"] = "paid_check_sent"
-    order_id = save_order(data, message)
-
-    admin_text = (
-        f"✅ To'lov cheki bilan yangi buyurtma #{order_id}\n\n"
-        f"📚 Kitob: {data['book_title']}\n"
-        f"💰 Narx: {format_money(int(data['price']))} so'm\n"
-        f"👤 Mijoz: {data['customer_name']}\n"
-        f"📞 Telefon: {data['phone']}\n"
-        f"📍 Manzil: {data['address']}\n"
-        f"💳 To'lov: Payme\n"
-        f"🔗 Username: @{message.from_user.username or 'yoq'}\n\n"
-        "Chek rasmi pastda yuborildi."
-    )
-    await notify_admin(bot, admin_text)
-    admin_chat_id = get_setting("admin_chat_id")
-    if admin_chat_id:
-        try:
-            await bot.send_photo(int(admin_chat_id), data["receipt_file_id"], caption=f"Chek #{order_id}")
-        except Exception as e:
-            logger.warning("Admin chek rasmi yuborilmadi: %s", e)
-
-    await message.answer(
-        "✅ To'lov cheki qabul qilindi. Admin tekshiradi va siz bilan bog'lanadi.",
-        reply_markup=main_menu(),
-    )
-    await state.clear()
+@router.message(F.text.func(lambda x: x in ["💳 To‘lov", "💳 Оплата"]))
+async def payment_info(message: Message):
+    await message.answer(tr(message.from_user.id, "payment_info"))
 
 
-@router.message(OrderStates.waiting_receipt)
-async def order_receipt_need_photo(message: Message) -> None:
-    await message.answer("Iltimos, to'lov chekini rasm sifatida yuboring.")
+@router.message(F.text.func(lambda x: x in ["🚚 Yetkazib berish", "🚚 Доставка"]))
+async def delivery_info(message: Message):
+    await message.answer(tr(message.from_user.id, "delivery_info"))
 
 
-@router.message(F.text == "💳 To'lov")
-async def payment_info(message: Message) -> None:
-    await message.answer(
-        "💳 Onlayn to'lov mavjud.\n"
-        "Buyurtma jarayonida Payme tanlasangiz, bot karta ma'lumotini chiqaradi."
-    )
+@router.message(F.text.func(lambda x: x in ["📩 Murojaat", "📩 Связаться"]))
+async def contact_start(message: Message, state: FSMContext):
+    await state.set_state(ContactState.waiting_message)
+    await message.answer(tr(message.from_user.id, "contact_prompt"), reply_markup=ReplyKeyboardRemove())
 
 
-@router.message(F.text == "🚚 Yetkazib berish")
-async def delivery_info(message: Message) -> None:
-    await message.answer(
-        "🚚 Yetkazib berish:\n\n"
-        "• Toshkent bo'ylab: 1 kun\n"
-        "• Viloyatlarga: 1-3 kun\n"
-        "• Buyurtma bo'yicha admin bog'lanadi"
-    )
-
-
-@router.message(F.text == "👨‍💼 Admin bilan bog'lanish")
-async def direct_admin(message: Message) -> None:
-    await message.answer(f"Admin bilan bog'lanish: @{ADMIN_USERNAME}")
-
-
-@router.message(F.text == "📩 Murojaat")
-async def contact_start(message: Message, state: FSMContext) -> None:
-    track_user(message)
-    await state.set_state(ContactStates.waiting_message)
-    await message.answer("Murojaatingizni yozing. Men uni adminga yuboraman.", reply_markup=ReplyKeyboardRemove())
-
-
-@router.message(ContactStates.waiting_message)
-async def contact_receive(message: Message, state: FSMContext, bot: Bot) -> None:
+@router.message(ContactState.waiting_message)
+async def contact_send(message: Message, state: FSMContext):
     text = (
-        "📩 Yangi murojaat\n\n"
-        f"👤 Ism: {message.from_user.full_name}\n"
-        f"🆔 ID: {message.from_user.id}\n"
-        f"🔗 Username: @{message.from_user.username or 'yoq'}\n"
-        f"💬 Xabar: {message.text}"
+        f"📩 <b>Murojaat / Обращение</b>\n\n"
+        f"👤 {message.from_user.full_name}\n"
+        f"🆔 @{message.from_user.username or 'no_username'}\n\n"
+        f"{message.text}"
     )
-    await notify_admin(bot, text)
-    await message.answer("✅ Murojaatingiz adminga yuborildi.", reply_markup=main_menu())
+    try:
+        await bot.send_message(chat_id=f"@{ADMIN_USERNAME}", text=text)
+    except Exception:
+        logging.exception("Admin username ga murojaat yuborilmadi")
+    await message.answer(tr(message.from_user.id, "contact_sent"), reply_markup=main_menu(message.from_user.id))
     await state.clear()
 
 
-@router.message(F.text == "➕ Kitob qo'shish")
-async def admin_add_book_start(message: Message, state: FSMContext) -> None:
+@router.message(F.text.func(lambda x: x in ["➕ Kitob qo‘shish", "➕ Добавить книгу"]))
+async def add_book_start(message: Message, state: FSMContext):
     if not is_admin(message):
+        await message.answer(tr(message.from_user.id, "admin_only"))
         return
-    await state.set_state(AdminAddBookStates.waiting_photo)
-    await message.answer(
-        "Kitob rasmini yuboring. Agar rasm bo'lmasa, /skip deb yozing.",
-        reply_markup=ReplyKeyboardRemove(),
-    )
+    await state.set_state(AddBookState.waiting_name)
+    await message.answer(tr(message.from_user.id, "send_book_name"), reply_markup=ReplyKeyboardRemove())
 
 
-@router.message(AdminAddBookStates.waiting_photo, Command("skip"))
-async def admin_skip_photo(message: Message, state: FSMContext) -> None:
-    await state.update_data(photo_file_id="")
-    await state.set_state(AdminAddBookStates.waiting_title)
-    await message.answer("Kitob nomini kiriting:")
+@router.message(AddBookState.waiting_name)
+async def add_book_name(message: Message, state: FSMContext):
+    await state.update_data(book_name=message.text.strip())
+    await state.set_state(AddBookState.waiting_price)
+    await message.answer(tr(message.from_user.id, "send_book_price"))
 
 
-@router.message(AdminAddBookStates.waiting_photo, F.photo)
-async def admin_add_photo(message: Message, state: FSMContext) -> None:
-    await state.update_data(photo_file_id=message.photo[-1].file_id)
-    await state.set_state(AdminAddBookStates.waiting_title)
-    await message.answer("Kitob nomini kiriting:")
-
-
-@router.message(AdminAddBookStates.waiting_photo)
-async def admin_photo_required(message: Message) -> None:
-    await message.answer("Rasm yuboring yoki /skip deb yozing.")
-
-
-@router.message(AdminAddBookStates.waiting_title)
-async def admin_add_title(message: Message, state: FSMContext) -> None:
-    await state.update_data(title=message.text.strip())
-    await state.set_state(AdminAddBookStates.waiting_price)
-    await message.answer("Kitob narxini kiriting. Masalan: 45000")
-
-
-@router.message(AdminAddBookStates.waiting_price)
-async def admin_add_price(message: Message, state: FSMContext) -> None:
-    price_text = message.text.strip().replace(" ", "")
-    if not price_text.isdigit():
-        await message.answer("Narxni faqat raqam bilan kiriting. Masalan: 45000")
+@router.message(AddBookState.waiting_price)
+async def add_book_price(message: Message, state: FSMContext):
+    raw = message.text.strip().replace(" ", "")
+    if not raw.isdigit():
+        await message.answer(tr(message.from_user.id, "bad_price"))
         return
-    await state.update_data(price=int(price_text))
-    await state.set_state(AdminAddBookStates.waiting_description)
-    await message.answer("Qisqa izoh kiriting. Agar kerak bo'lmasa /skip deb yozing.")
+    await state.update_data(book_price=int(raw))
+    await state.set_state(AddBookState.waiting_photo)
+    await message.answer(tr(message.from_user.id, "send_book_photo"))
 
 
-@router.message(AdminAddBookStates.waiting_description, Command("skip"))
-async def admin_skip_description(message: Message, state: FSMContext) -> None:
-    await save_admin_book(message, state, "")
-
-
-@router.message(AdminAddBookStates.waiting_description)
-async def admin_add_description(message: Message, state: FSMContext) -> None:
-    await save_admin_book(message, state, message.text.strip())
-
-
-async def save_admin_book(message: Message, state: FSMContext, description: str) -> None:
+@router.message(AddBookState.waiting_photo, Command("skip"))
+async def add_book_skip_photo(message: Message, state: FSMContext):
     data = await state.get_data()
     books = load_books()
-    book = {
-        "id": next_book_id(books),
-        "title": data["title"],
-        "price": int(data["price"]),
-        "description": description,
-        "photo_file_id": data.get("photo_file_id", ""),
-    }
-    books.append(book)
+    new_id = max([b["id"] for b in books], default=0) + 1
+    books.append({"id": new_id, "name": data["book_name"], "price": data["book_price"], "photo_file_id": None})
     save_books(books)
     await state.clear()
+    await message.answer(tr(message.from_user.id, "book_saved"), reply_markup=admin_menu(message.from_user.id))
+
+
+@router.message(AddBookState.waiting_photo, F.photo)
+async def add_book_photo(message: Message, state: FSMContext):
+    data = await state.get_data()
+    books = load_books()
+    new_id = max([b["id"] for b in books], default=0) + 1
+    books.append({"id": new_id, "name": data["book_name"], "price": data["book_price"], "photo_file_id": message.photo[-1].file_id})
+    save_books(books)
+    await state.clear()
+    await message.answer(tr(message.from_user.id, "book_saved"), reply_markup=admin_menu(message.from_user.id))
+
+
+@router.message(AddBookState.waiting_photo)
+async def add_book_photo_invalid(message: Message):
+    await message.answer("Rasm yuboring yoki /skip yozing." if get_lang(message.from_user.id) == "uz" else "Отправьте фото или напишите /skip.")
+
+
+@router.message(F.text.func(lambda x: x in ["📚 Kitoblar ro‘yxati", "📚 Список книг"]))
+async def admin_book_list(message: Message):
+    if not is_admin(message):
+        await message.answer(tr(message.from_user.id, "admin_only"))
+        return
+    books = load_books()
+    if not books:
+        await message.answer(tr(message.from_user.id, "no_books"))
+        return
+    await message.answer("\n".join([f"{b['id']}. {b['name']} — {b['price']} so‘m" for b in books]))
+
+
+@router.message(F.text.func(lambda x: x in ["🗑 Kitob o‘chirish", "🗑 Удалить книгу"]))
+async def delete_book_prompt(message: Message):
+    if not is_admin(message):
+        await message.answer(tr(message.from_user.id, "admin_only"))
+        return
+    books = load_books()
+    if not books:
+        await message.answer(tr(message.from_user.id, "no_books"))
+        return
+    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"{b['name']} ({b['price']})", callback_data=f"del:{b['id']}")] for b in books])
+    await message.answer(tr(message.from_user.id, "choose_delete_book"), reply_markup=kb)
+
+
+@router.callback_query(F.data.startswith("del:"))
+async def delete_book_callback(callback: CallbackQuery):
+    if (callback.from_user.username or "").lstrip("@").lower() != ADMIN_USERNAME.lower():
+        await callback.answer("Not allowed", show_alert=True)
+        return
+    book_id = int(callback.data.split(":")[1])
+    books = [b for b in load_books() if b["id"] != book_id]
+    save_books(books)
+    await callback.message.answer(tr(callback.from_user.id, "book_deleted"), reply_markup=admin_menu(callback.from_user.id))
+    await callback.answer()
+
+
+@router.message(F.text.func(lambda x: x in ["📦 Buyurtmalar", "📦 Заказы"]))
+async def admin_orders(message: Message):
+    if not is_admin(message):
+        await message.answer(tr(message.from_user.id, "admin_only"))
+        return
+    orders = load_orders()
+    if not orders:
+        await message.answer(tr(message.from_user.id, "no_orders"))
+        return
+    parts = []
+    for i, o in enumerate(orders[-20:], start=1):
+        parts.append(
+            f"{i}. 📚 {o['book_name']} | 💰 {o['price']} so‘m | 💳 {o['payment']}\n"
+            f"👤 {o['customer_name']} | 📞 {o['phone']} | @{o['username'] or 'no_username'}"
+        )
+    await message.answer("\n\n".join(parts))
+
+
+@router.message(F.text.func(lambda x: x in ["📊 Statistika", "📊 Статистика"]))
+async def admin_stats(message: Message):
+    if not is_admin(message):
+        await message.answer(tr(message.from_user.id, "admin_only"))
+        return
     await message.answer(
-        f"✅ Kitob qo'shildi:\n\n📚 {book['title']}\n💰 {format_money(book['price'])} so'm",
-        reply_markup=admin_menu(),
+        tr(message.from_user.id, "stats_text", users=len(load_users()), books=len(load_books()), orders=len(load_orders()))
     )
-
-
-@router.message(F.text == "📚 Kitoblar ro'yxati")
-async def admin_books_list(message: Message) -> None:
-    if not is_admin(message):
-        return
-    books = load_books()
-    if not books:
-        await message.answer("Hozircha kitoblar yo'q.", reply_markup=admin_menu())
-        return
-    lines = ["📚 Kitoblar ro'yxati:\n"]
-    for book in books:
-        lines.append(f"ID {book['id']} — {book['title']} — {format_money(int(book['price']))} so'm")
-    await message.answer("\n".join(lines), reply_markup=admin_menu())
-
-
-@router.message(F.text == "🗑 Kitob o'chirish")
-async def admin_delete_start(message: Message, state: FSMContext) -> None:
-    if not is_admin(message):
-        return
-    books = load_books()
-    if not books:
-        await message.answer("O'chirish uchun kitob yo'q.", reply_markup=admin_menu())
-        return
-    lines = ["O'chirish uchun ID ni yuboring:\n"]
-    for book in books:
-        lines.append(f"ID {book['id']} — {book['title']}")
-    await state.set_state(AdminDeleteBookStates.waiting_book_id)
-    await message.answer("\n".join(lines), reply_markup=ReplyKeyboardRemove())
-
-
-@router.message(AdminDeleteBookStates.waiting_book_id)
-async def admin_delete_finish(message: Message, state: FSMContext) -> None:
-    text = message.text.strip()
-    if not text.isdigit():
-        await message.answer("Iltimos, kitob ID raqamini yuboring.")
-        return
-    ok = delete_book(int(text))
-    await state.clear()
-    if ok:
-        await message.answer("✅ Kitob o'chirildi.", reply_markup=admin_menu())
-    else:
-        await message.answer("Bunday ID topilmadi.", reply_markup=admin_menu())
-
-
-@router.message(F.text == "📦 Buyurtmalar")
-async def admin_orders(message: Message) -> None:
-    if not is_admin(message):
-        return
-    rows = latest_orders(10)
-    if not rows:
-        await message.answer("Hozircha buyurtmalar yo'q.", reply_markup=admin_menu())
-        return
-    lines = ["📦 So'nggi buyurtmalar:\n"]
-    for row in rows:
-        order_id, book_title, customer_name, phone, address, payment_type, status, created_at = row
-        lines.append(
-            f"#{order_id} | {book_title}\n"
-            f"👤 {customer_name} | 📞 {phone}\n"
-            f"📍 {address}\n"
-            f"💳 {payment_type} | 📌 {status} | 🕒 {created_at}\n"
-        )
-    await message.answer("\n".join(lines), reply_markup=admin_menu())
-
-
-@router.message(F.text == "📊 Statistika")
-async def admin_stats(message: Message) -> None:
-    if not is_admin(message):
-        return
-    text = (
-        "📊 Statistika\n\n"
-        f"👥 Foydalanuvchilar: {user_count()}\n"
-        f"📦 Buyurtmalar: {order_count()}\n"
-        f"📚 Kitoblar: {len(load_books())}"
-    )
-    await message.answer(text, reply_markup=admin_menu())
-
-
-@router.message(Command("cancel"))
-async def cancel(message: Message, state: FSMContext) -> None:
-    await state.clear()
-    await message.answer("❌ Jarayon bekor qilindi.", reply_markup=main_menu())
-
-
-@router.message(F.chat.type.in_({ChatType.GROUP, ChatType.SUPERGROUP}))
-async def group_signal(message: Message, bot: Bot) -> None:
-    if not message.text:
-        return
-    lower = message.text.lower()
-    if any(k in lower for k in KEYWORDS):
-        alert = (
-            "🚨 Muhokama guruhida qiziqqan odam topildi\n\n"
-            f"👥 Guruh: {message.chat.title}\n"
-            f"👤 Ism: {message.from_user.full_name}\n"
-            f"🔗 Username: @{message.from_user.username or 'yoq'}\n"
-            f"💬 Xabar: {message.text}"
-        )
-        await notify_admin(bot, alert)
 
 
 @router.message()
-async def fallback(message: Message) -> None:
-    track_user(message)
-    await message.answer("Kerakli bo'limni menyudan tanlang.", reply_markup=main_menu())
+async def fallback(message: Message):
+    remember_user(message)
+    lang = get_lang(message.from_user.id)
+    if lang not in ("uz", "ru"):
+        await message.answer("Tilni tanlang / Выберите язык:", reply_markup=language_kb())
+        return
+    await message.answer(tr(message.from_user.id, "welcome"), reply_markup=main_menu(message.from_user.id))
 
 
-async def main() -> None:
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN kiritilmagan")
-    init_db()
-    if not BOOKS_PATH.exists():
-        save_books([])
-
-    bot = Bot(BOT_TOKEN, default=DefaultBotProperties(parse_mode=ParseMode.HTML))
-    dp = Dispatcher(storage=MemoryStorage())
-    dp.include_router(router)
+async def main():
     await dp.start_polling(bot)
 
 
 if __name__ == "__main__":
+    import asyncio
     asyncio.run(main())

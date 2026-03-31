@@ -1,23 +1,25 @@
-# KitobStoreUz PRO bot
+# KitobStoreUz bot (UZ + RU)
 
-## Nimalar bor
-- Rasm bilan kitob qo'shish
-- Sotib olish tugmasi
-- Avtomatik buyurtma
-- Admin signal
-- Payme uchun karta ko'rsatish
-- Murojaat tugmasi
-- Muhokama guruhidan signal
-- Admin panel: /admin
+Bu versiyada:
+- /start bosilganda til tanlash chiqadi
+- 🇺🇿 O‘zbekcha
+- 🇷🇺 Русский
+- kitoblar ro‘yxati
+- inline `🛒 Sotib olish / Купить`
+- buyurtma: ism + telefon + to‘lov turi
+- Payme karta ma’lumoti buyurtmadan keyin chiqadi
+- `/admin` panel
+- kitob qo‘shish (rasm bilan)
+- kitob o‘chirish
+- buyurtmalar
+- statistika
+- murojaat adminga yuboriladi
 
-## Ishga tushirish
-1. Fayllarni GitHub repo'ga yuklang
-2. Railway'da repo'ni ulang
-3. Variables bo'limida BOT_TOKEN kiriting
-4. Kerak bo'lsa ADMIN_USERNAME ni o'zgartiring
-5. Botga /start yozing
-6. Admin uchun /admin yozing
+Railway uchun:
+1. GitHub repo ichidagi eski fayllar o‘rniga shu fayllarni yuklang
+2. Commit qiling
+3. Railway redeploy bo‘ladi
+4. Variables ichida `BOT_TOKEN` saqlangan bo‘lsin
 
-## Muhim
-- Payme uchun karta ma'lumoti faqat buyurtma jarayonida chiqadi
-- Guruh xabarlarini ko'rishi uchun botni guruhga admin qiling va BotFather'da Privacy Mode OFF bo'lsin
+Muhim:
+ZIPning o‘zini emas, ichidagi fayllarni yuklang.
