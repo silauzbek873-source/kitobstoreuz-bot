@@ -31,6 +31,7 @@ ORDERS_FILE = BASE_DIR / "orders.json"
 BOT_TOKEN = os.getenv("BOT_TOKEN", "").strip()
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "Abdullayevv_tm").lstrip("@").strip()
 ADMIN_ID = int(os.getenv("ADMIN_ID", "7020576612"))
+CHANNEL_ID = -1003510697818
 PAYMENT_CARD = os.getenv("PAYMENT_CARD", "5614 6814 0959 5364").strip()
 CARD_HOLDER = os.getenv("CARD_HOLDER", "Abdullayev Saidaxmad").strip()
 BRAND_NAME = os.getenv("BRAND_NAME", "KitobStoreUz").strip()
@@ -427,7 +428,7 @@ async def order_payment(message: Message, state: FSMContext) -> None:
     await message.answer(admin_text)
     # Shaxsiyga ham yuborsin
     try:
-        await bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+        await bot.send_message(chat_id=CHANNEL_ID, text=admin_text)
     except Exception:
         logging.exception("Admin ID ga buyurtma yuborilmadi")
 
