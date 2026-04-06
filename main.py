@@ -117,8 +117,6 @@ TEXTS = {
         "delivery_text": "🚚 Yetkazib berish mavjud. Buyurtma paytida joylashuv yuborasiz.",
         "payment_text": "💳 To'lov turlari: Payme yoki Naqd.",
         "stats_text": "📊 Statistika:\n\n👥 Foydalanuvchilar: {users}\n📚 Kitoblar: {books}\n📦 Buyurtmalar: {orders}",
-        "language_saved": "✅ Til saqlandi.",
-        "back_admin": "Admin panelga qaytdingiz.",
     },
     "ru": {
         "choose_lang": "Выберите язык:",
@@ -160,8 +158,6 @@ TEXTS = {
         "delivery_text": "🚚 Доставка доступна. При заказе отправьте локацию.",
         "payment_text": "💳 Виды оплаты: Payme или Наличные.",
         "stats_text": "📊 Статистика:\n\n👥 Пользователи: {users}\n📚 Книги: {books}\n📦 Заказы: {orders}",
-        "language_saved": "✅ Язык сохранён.",
-        "back_admin": "Возврат в админ панель.",
     },
 }
 
@@ -253,9 +249,7 @@ def payment_choice_kb(user_id: int) -> ReplyKeyboardMarkup:
 
 def buy_inline_kb(book_id: int, user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [InlineKeyboardButton(text=tr(user_id, "buy"), callback_data=f"buy:{book_id}")]
-        ]
+        inline_keyboard=[[InlineKeyboardButton(text=tr(user_id, "buy"), callback_data=f"buy:{book_id}")]]
     )
 
 
@@ -310,16 +304,20 @@ async def show_books(message: Message) -> None:
         return
     await message.answer(tr(message.from_user.id, "choose_book"))
     for book in books:
-        caption = (
-            f"📚 <b>{book['name']}</b>\n"
-            f"💰 {book['price']} so'm\n\n"
-            f"{book.get('desc', '')}"
-        )
-        photo = book.get("photo", "").strip()
+        caption = f"📚 <b>{book['name']}</b>\n💰 {book['price']} so'm\n\n{book.get('desc', '')}"
+        photo = (book.get("photo") or "").strip()
         if photo and Path(photo).exists():
-            await message.answer_photo(FSInputFile(photo), caption=caption, reply_markup=buy_inline_kb(book["id"], message.from_user.id))
+            await message.answer_photo(
+                FSInputFile(photo),
+                caption=caption,
+                reply_markup=buy_inline_kb(book["id"], message.from_user.id),
+            )
         elif photo:
-            await message.answer_photo(photo=photo, caption=caption, reply_markup=buy_inline_kb(book["id"], message.from_user.id))
+            await message.answer_photo(
+                photo=photo,
+                caption=caption,
+                reply_markup=buy_inline_kb(book["id"], message.from_user.id),
+            )
         else:
             await message.answer(caption, reply_markup=buy_inline_kb(book["id"], message.from_user.id))
 
@@ -386,7 +384,8 @@ async def order_payment(message: Message, state: FSMContext) -> None:
         await message.answer("Kitob topilmadi.", reply_markup=main_menu(message.from_user.id))
         return
 
-    payment_type = "Payme" if "Payme" in (message.text or "") else ("Naqd" if get_lang(message.from_user.id) == "uz" else "Наличные")
+    txt = message.text or ""
+    payment_type = "Payme" if "Payme" in txt else ("Naqd" if get_lang(message.from_user.id) == "uz" else "Наличные")
     latitude = data.get("location_lat")
     longitude = data.get("location_lon")
     location_url = f"https://maps.google.com/?q={latitude},{longitude}" if latitude is not None and longitude is not None else ""
@@ -424,9 +423,9 @@ async def order_payment(message: Message, state: FSMContext) -> None:
         f"{location_line}"
     )
 
-    # Bot ichiga ham
+    # Bot ichida ham ko'rsin
     await message.answer(admin_text)
-    # Shaxsiy admin chatga ham
+    # Shaxsiyga ham yuborsin
     try:
         await bot.send_message(chat_id=ADMIN_ID, text=admin_text)
     except Exception:
@@ -451,7 +450,10 @@ async def contact_info(message: Message) -> None:
     text = tr(message.from_user.id, "contact_text", admin=ADMIN_USERNAME, card=PAYMENT_CARD, holder=CARD_HOLDER)
     await message.answer(text)
     try:
-        await bot.send_message(chat_id=ADMIN_ID, text=f"☎️ Murojaat / Обращение\n\n🆔 {message.from_user.id}\n👤 @{message.from_user.username or 'no_username'}")
+        await bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"☎️ Murojaat / Обращение\n\n🆔 {message.from_user.id}\n👤 @{message.from_user.username or 'no_username'}",
+        )
     except Exception:
         logging.exception("Admin ID ga murojaat yuborilmadi")
 
@@ -491,9 +493,7 @@ async def admin_book_list(message: Message) -> None:
     if not books:
         await message.answer(tr(message.from_user.id, "book_empty"))
         return
-    lines = []
-    for b in books:
-        lines.append(f"{b['id']}. {b['name']} | {b['price']} so'm")
+    lines = [f"{b['id']}. {b['name']} | {b['price']} so'm" for b in books]
     await message.answer("\n".join(lines))
 
 
