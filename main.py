@@ -2,20 +2,24 @@ import os
 import json
 import logging
 from pathlib import Path
-from typing import Dict, List, Any
+from typing import Any, Dict, List
 
 from aiogram import Bot, Dispatcher, Router, F
+from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.filters import Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import (
-    Message, CallbackQuery,
-    ReplyKeyboardMarkup, KeyboardButton,
-    InlineKeyboardMarkup, InlineKeyboardButton,
+    Message,
+    CallbackQuery,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
     ReplyKeyboardRemove,
 )
-from aiogram.client.default import DefaultBotProperties
-from aiogram.fsm.state import StatesGroup, State
-from aiogram.fsm.context import FSMContext
+from aiogram.types.input_file import FSInputFile
 
 logging.basicConfig(level=logging.INFO)
 
@@ -35,9 +39,12 @@ if not BOT_TOKEN:
     raise RuntimeError("BOT_TOKEN topilmadi. Railway Variables ichiga BOT_TOKEN qo'shing.")
 
 
-def ensure_file(path: Path, default_data: Any):
+def ensure_file(path: Path, default_data: Any) -> None:
     if not path.exists():
-        path.write_text(json.dumps(default_data, ensure_ascii=False, indent=2), encoding="utf-8")
+        path.write_text(
+            json.dumps(default_data, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
 
 
 ensure_file(BOOKS_FILE, [])
@@ -45,271 +52,217 @@ ensure_file(USERS_FILE, {})
 ensure_file(ORDERS_FILE, [])
 
 
-def load_json(path: Path, default: Any):
-    try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except Exception:
-        return default
+def load_books() -> List[Dict[str, Any]]:
+    return json.loads(BOOKS_FILE.read_text(encoding="utf-8"))
 
 
-def save_json(path: Path, data: Any):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+def save_books(data: List[Dict[str, Any]]) -> None:
+    BOOKS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_books() -> List[Dict]:
-    return load_json(BOOKS_FILE, [])
+def load_users() -> Dict[str, Any]:
+    return json.loads(USERS_FILE.read_text(encoding="utf-8"))
 
 
-def save_books(data: List[Dict]):
-    save_json(BOOKS_FILE, data)
+def save_users(data: Dict[str, Any]) -> None:
+    USERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def load_users() -> Dict[str, Dict]:
-    return load_json(USERS_FILE, {})
+def load_orders() -> List[Dict[str, Any]]:
+    return json.loads(ORDERS_FILE.read_text(encoding="utf-8"))
 
 
-def save_users(data: Dict[str, Dict]):
-    save_json(USERS_FILE, data)
-
-
-def load_orders() -> List[Dict]:
-    return load_json(ORDERS_FILE, [])
-
-
-def save_orders(data: List[Dict]):
-    save_json(ORDERS_FILE, data)
+def save_orders(data: List[Dict[str, Any]]) -> None:
+    ORDERS_FILE.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 TEXTS = {
     "uz": {
         "choose_lang": "Tilni tanlang:",
-        "lang_set": "✅ Til o‘rnatildi: O‘zbekcha",
-        "welcome": (
-            f"📚 Assalomu alaykum!\n\n"
-            f"Siz {BRAND_NAME} botidasiz 👋\n\n"
-            f"Bu yerda siz:\n"
-            f"🧠 Fikrni o‘zgartiradigan kitoblar\n"
-            f"💸 Qulay narxlar\n"
-            f"🚚 Tez yetkazib berish\n\n"
-            f"👇 Quyidagi tugmalardan foydalaning:"
-        ),
+        "welcome": "📚 Assalomu alaykum!\n\nSiz KitobStoreUz botidasiz 👋\n\nQuyidagi tugmalardan foydalaning:",
         "books": "📚 Kitoblar",
-        "order": "🛒 Buyurtma berish",
-        "payment": "💳 To‘lov",
+        "order": "🛒 Buyurtma",
+        "payment": "💳 To'lov",
         "delivery": "🚚 Yetkazib berish",
-        "contact": "📩 Murojaat",
-        "admin": "👨‍💼 Admin",
-        "no_books": "📚 Hozircha kitoblar qo‘shilmagan.",
-        "choose_book": "Quyidagilardan birini tanlang:",
-        "buy": "🛒 Sotib olish",
-        "order_need_books": "🛒 Buyurtma uchun avval kitob qo‘shilishi kerak.",
-        "payment_info": (
-            "💳 To‘lov usullari:\n\n"
-            "• Payme\n"
-            "• Naqd\n\n"
-            "Buyurtma jarayonida to‘lov turi tanlanadi."
-        ),
-        "delivery_info": "🚚 Yetkazib berish:\n\n📍 Toshkent: 1 kun\n📦 Viloyatlar: 1-3 kun",
-        "contact_prompt": "✍️ Xabaringizni yuboring. Men uni adminga yetkazaman.",
-        "contact_sent": "✅ Xabaringiz adminga yuborildi.",
-        "admin_only": "⛔ Bu bo‘lim faqat admin uchun.",
+        "contact": "☎️ Aloqa",
+        "admin": "⚙️ Admin panel",
+        "admin_not_allowed": "Siz admin emassiz.",
         "admin_panel": "⚙️ Admin panel",
-        "add_book": "➕ Kitob qo‘shish",
-        "delete_book": "🗑 Kitob o‘chirish",
-        "book_list": "📚 Kitoblar ro‘yxati",
+        "add_book": "➕ Kitob qo'shish",
+        "delete_book": "🗑 Kitob o'chirish",
+        "book_list": "📚 Kitoblar ro'yxati",
         "orders": "📦 Buyurtmalar",
         "stats": "📊 Statistika",
-        "normal_menu": "🏠 Oddiy menyu",
-        "send_book_name": "Kitob nomini yuboring:",
-        "send_book_price": "Narxini yuboring (faqat raqam):",
-        "send_book_photo": "Endi kitob rasmini yuboring. Agar rasm bo‘lmasa /skip yozing.",
-        "book_saved": "✅ Kitob qo‘shildi.",
-        "bad_price": "❗ Narxni faqat raqam bilan yuboring. Masalan: 50000",
-        "choose_delete_book": "O‘chirmoqchi bo‘lgan kitobni tanlang:",
-        "book_deleted": "🗑 Kitob o‘chirildi.",
-        "no_orders": "📦 Hozircha buyurtmalar yo‘q.",
-        "stats_text": "📊 Statistika:\n\n👥 Foydalanuvchilar: {users}\n📚 Kitoblar: {books}\n📦 Buyurtmalar: {orders}",
-        "enter_name": "👤 Ismingizni yuboring:",
-        "enter_phone": "📞 Telefon raqamingizni yuboring:",
-        "choose_payment": "💳 To‘lov turini tanlang:",
+        "ordinary_menu": "🏠 Oddiy menyu",
+        "choose_book": "Quyidagi kitoblardan tanlang:",
+        "book_empty": "Hozircha kitoblar yo'q.",
+        "buy": "🛒 Buyurtma berish",
+        "enter_name": "✍️ Ismingizni kiriting:",
+        "send_phone": "📱 Telefon raqamingizni pastdagi tugma orqali yuboring:",
+        "send_location": "📍 Joylashuvingizni pastdagi tugma orqali yuboring:",
+        "choose_payment": "💳 To'lov turini tanlang:",
         "payme": "💳 Payme",
         "cash": "💵 Naqd",
-        "order_confirmed": "✅ Buyurtmangiz qabul qilindi. Tez orada siz bilan bog‘lanamiz.",
-        "payme_info": (
-            "💳 Online to‘lov\n\n"
-            f"Karta: {PAYMENT_CARD}\n"
-            f"Qabul qiluvchi: {CARD_HOLDER}\n\n"
-            "✅ To‘lov qilgandan keyin chek skrinshotini yuboring."
-        ),
-        "start_over": "🔄 Qayta boshlash uchun /start ni bosing.",
+        "order_saved": "✅ Buyurtmangiz qabul qilindi. Tez orada siz bilan bog'lanamiz.",
+        "phone_wrong": "Iltimos, telefon raqamni tugma orqali yuboring.",
+        "location_wrong": "Iltimos, joylashuvni tugma orqali yuboring.",
+        "enter_book_name": "Yangi kitob nomini kiriting:",
+        "enter_book_price": "Narxini kiriting (faqat raqam):",
+        "enter_book_desc": "Qisqacha mazmunini kiriting:",
+        "enter_book_photo": "Rasm yuboring:",
+        "book_added": "✅ Kitob qo'shildi.",
+        "book_deleted": "✅ Kitob o'chirildi.",
+        "choose_delete_book": "O'chirish uchun kitobni tanlang:",
+        "contact_text": "Admin: @{admin}\nKarta: {card}\nKarta egasi: {holder}",
+        "delivery_text": "🚚 Yetkazib berish mavjud. Buyurtma paytida joylashuv yuborasiz.",
+        "payment_text": "💳 To'lov turlari: Payme yoki Naqd.",
+        "stats_text": "📊 Statistika:\n\n👥 Foydalanuvchilar: {users}\n📚 Kitoblar: {books}\n📦 Buyurtmalar: {orders}",
+        "language_saved": "✅ Til saqlandi.",
+        "back_admin": "Admin panelga qaytdingiz.",
     },
     "ru": {
         "choose_lang": "Выберите язык:",
-        "lang_set": "✅ Язык установлен: Русский",
-        "welcome": (
-            f"📚 Добро пожаловать!\n\n"
-            f"Вы в боте {BRAND_NAME} 👋\n\n"
-            f"Здесь вы найдете:\n"
-            f"🧠 Книги, меняющие мышление\n"
-            f"💸 Доступные цены\n"
-            f"🚚 Быстрая доставка\n\n"
-            f"👇 Используйте кнопки ниже:"
-        ),
+        "welcome": "📚 Здравствуйте!\n\nВы в боте KitobStoreUz 👋\n\nИспользуйте кнопки ниже:",
         "books": "📚 Книги",
-        "order": "🛒 Заказать",
+        "order": "🛒 Заказ",
         "payment": "💳 Оплата",
         "delivery": "🚚 Доставка",
-        "contact": "📩 Связаться",
-        "admin": "👨‍💼 Админ",
-        "no_books": "📚 Пока книги не добавлены.",
-        "choose_book": "Выберите одну из книг:",
-        "buy": "🛒 Купить",
-        "order_need_books": "🛒 Сначала нужно добавить книги.",
-        "payment_info": (
-            "💳 Способы оплаты:\n\n"
-            "• Payme\n"
-            "• Наличные\n\n"
-            "Способ оплаты выбирается во время заказа."
-        ),
-        "delivery_info": "🚚 Доставка:\n\n📍 Ташкент: 1 день\n📦 Регионы: 1-3 дня",
-        "contact_prompt": "✍️ Отправьте ваше сообщение. Я передам его админу.",
-        "contact_sent": "✅ Сообщение отправлено админу.",
-        "admin_only": "⛔ Этот раздел только для администратора.",
-        "admin_panel": "⚙️ Админ-панель",
+        "contact": "☎️ Контакт",
+        "admin": "⚙️ Админ панель",
+        "admin_not_allowed": "Вы не админ.",
+        "admin_panel": "⚙️ Админ панель",
         "add_book": "➕ Добавить книгу",
         "delete_book": "🗑 Удалить книгу",
         "book_list": "📚 Список книг",
         "orders": "📦 Заказы",
         "stats": "📊 Статистика",
-        "normal_menu": "🏠 Обычное меню",
-        "send_book_name": "Отправьте название книги:",
-        "send_book_price": "Отправьте цену (только цифры):",
-        "send_book_photo": "Теперь отправьте фото книги. Если фото нет, отправьте /skip.",
-        "book_saved": "✅ Книга добавлена.",
-        "bad_price": "❗ Отправьте цену только цифрами. Например: 50000",
-        "choose_delete_book": "Выберите книгу для удаления:",
-        "book_deleted": "🗑 Книга удалена.",
-        "no_orders": "📦 Заказов пока нет.",
-        "stats_text": "📊 Статистика:\n\n👥 Пользователи: {users}\n📚 Книги: {books}\n📦 Заказы: {orders}",
-        "enter_name": "👤 Отправьте ваше имя:",
-        "enter_phone": "📞 Отправьте номер телефона:",
+        "ordinary_menu": "🏠 Обычное меню",
+        "choose_book": "Выберите книгу:",
+        "book_empty": "Пока книг нет.",
+        "buy": "🛒 Заказать",
+        "enter_name": "✍️ Введите имя:",
+        "send_phone": "📱 Отправьте номер телефона кнопкой ниже:",
+        "send_location": "📍 Отправьте локацию кнопкой ниже:",
         "choose_payment": "💳 Выберите способ оплаты:",
         "payme": "💳 Payme",
         "cash": "💵 Наличные",
-        "order_confirmed": "✅ Ваш заказ принят. Мы скоро с вами свяжемся.",
-        "payme_info": (
-            "💳 Онлайн-оплата\n\n"
-            f"Карта: {PAYMENT_CARD}\n"
-            f"Получатель: {CARD_HOLDER}\n\n"
-            "✅ После оплаты отправьте скриншот чека."
-        ),
-        "start_over": "🔄 Чтобы начать заново, нажмите /start.",
+        "order_saved": "✅ Ваш заказ принят. Скоро с вами свяжемся.",
+        "phone_wrong": "Пожалуйста, отправьте номер телефона кнопкой.",
+        "location_wrong": "Пожалуйста, отправьте локацию кнопкой.",
+        "enter_book_name": "Введите название книги:",
+        "enter_book_price": "Введите цену (только число):",
+        "enter_book_desc": "Введите краткое описание:",
+        "enter_book_photo": "Отправьте фото:",
+        "book_added": "✅ Книга добавлена.",
+        "book_deleted": "✅ Книга удалена.",
+        "choose_delete_book": "Выберите книгу для удаления:",
+        "contact_text": "Админ: @{admin}\nКарта: {card}\nВладелец карты: {holder}",
+        "delivery_text": "🚚 Доставка доступна. При заказе отправьте локацию.",
+        "payment_text": "💳 Виды оплаты: Payme или Наличные.",
+        "stats_text": "📊 Статистика:\n\n👥 Пользователи: {users}\n📚 Книги: {books}\n📦 Заказы: {orders}",
+        "language_saved": "✅ Язык сохранён.",
+        "back_admin": "Возврат в админ панель.",
     },
 }
 
 
-def users_db():
-    return load_users()
-
-
 def get_lang(user_id: int) -> str:
-    users = users_db()
+    users = load_users()
     return users.get(str(user_id), {}).get("lang", "uz")
 
 
-def set_lang(user_id: int, lang: str):
-    users = users_db()
-    item = users.get(str(user_id), {})
-    item["lang"] = lang
-    users[str(user_id)] = item
-    save_users(users)
+def tr(user_id: int, key: str, **kwargs) -> str:
+    lang = get_lang(user_id)
+    text = TEXTS.get(lang, TEXTS["uz"]).get(key, key)
+    return text.format(**kwargs)
 
 
-def remember_user(message: Message):
-    users = users_db()
-    users[str(message.from_user.id)] = {
+def remember_user(message: Message) -> None:
+    users = load_users()
+    uid = str(message.from_user.id)
+    users[uid] = {
         "tg_id": message.from_user.id,
         "username": message.from_user.username or "",
         "full_name": message.from_user.full_name or "",
-        "lang": users.get(str(message.from_user.id), {}).get("lang", "uz"),
+        "lang": users.get(uid, {}).get("lang", "uz"),
     }
     save_users(users)
 
 
-def tr(user_id: int, key: str, **kwargs) -> str:
-    text = TEXTS[get_lang(user_id)][key]
-    return text.format(**kwargs) if kwargs else text
-
-
 def is_admin(message: Message) -> bool:
-    return (message.from_user.username or "").lstrip("@").lower() == ADMIN_USERNAME.lower()
-
-
-def language_kb():
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="🇺🇿 O‘zbekcha"), KeyboardButton(text="🇷🇺 Русский")]],
-        resize_keyboard=True
+    return (
+        (message.from_user.username or "").lstrip("@").lower() == ADMIN_USERNAME.lower()
+        or message.from_user.id == ADMIN_ID
     )
 
 
-def main_menu(user_id: int):
+def language_kb() -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="Uz O'zbekcha"), KeyboardButton(text="Ru Русский")]],
+        resize_keyboard=True,
+    )
+
+
+def main_menu(user_id: int) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=tr(user_id, "books")), KeyboardButton(text=tr(user_id, "order"))],
             [KeyboardButton(text=tr(user_id, "payment")), KeyboardButton(text=tr(user_id, "delivery"))],
             [KeyboardButton(text=tr(user_id, "contact")), KeyboardButton(text=tr(user_id, "admin"))],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
 
 
-def admin_menu(user_id: int):
+def admin_menu(user_id: int) -> ReplyKeyboardMarkup:
     return ReplyKeyboardMarkup(
         keyboard=[
             [KeyboardButton(text=tr(user_id, "add_book")), KeyboardButton(text=tr(user_id, "delete_book"))],
             [KeyboardButton(text=tr(user_id, "book_list")), KeyboardButton(text=tr(user_id, "orders"))],
-            [KeyboardButton(text=tr(user_id, "stats")), KeyboardButton(text=tr(user_id, "normal_menu"))],
+            [KeyboardButton(text=tr(user_id, "stats")), KeyboardButton(text=tr(user_id, "ordinary_menu"))],
         ],
-        resize_keyboard=True
+        resize_keyboard=True,
     )
 
 
-def payment_choice_kb(user_id: int):
-    return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=tr(user_id, "payme")), KeyboardButton(text=tr(user_id, "cash"))]],
-        resize_keyboard=True, one_time_keyboard=True
-    )
-
-
-def contact_request_kb(user_id: int):
+def contact_request_kb(user_id: int) -> ReplyKeyboardMarkup:
     text = "📱 Telefon raqam yuborish" if get_lang(user_id) == "uz" else "📱 Отправить номер телефона"
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=text, request_contact=True)]],
-        resize_keyboard=True, one_time_keyboard=True
+        resize_keyboard=True,
+        one_time_keyboard=True,
     )
 
 
-def location_request_kb(user_id: int):
+def location_request_kb(user_id: int) -> ReplyKeyboardMarkup:
     text = "📍 Joylashuvni yuborish" if get_lang(user_id) == "uz" else "📍 Отправить локацию"
     return ReplyKeyboardMarkup(
         keyboard=[[KeyboardButton(text=text, request_location=True)]],
-        resize_keyboard=True, one_time_keyboard=True
+        resize_keyboard=True,
+        one_time_keyboard=True,
     )
 
 
-def buy_inline_kb(book_id: int, user_id: int):
+def payment_choice_kb(user_id: int) -> ReplyKeyboardMarkup:
+    return ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text=tr(user_id, "payme")), KeyboardButton(text=tr(user_id, "cash"))]],
+        resize_keyboard=True,
+        one_time_keyboard=True,
+    )
+
+
+def buy_inline_kb(book_id: int, user_id: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
-        inline_keyboard=[[InlineKeyboardButton(text=tr(user_id, "buy"), callback_data=f"buy:{book_id}")]]
+        inline_keyboard=[
+            [InlineKeyboardButton(text=tr(user_id, "buy"), callback_data=f"buy:{book_id}")]
+        ]
     )
-
-
-class ContactState(StatesGroup):
-    waiting_message = State()
 
 
 class AddBookState(StatesGroup):
     waiting_name = State()
     waiting_price = State()
+    waiting_desc = State()
     waiting_photo = State()
 
 
@@ -327,137 +280,113 @@ dp.include_router(router)
 
 
 @router.message(Command("start"))
-async def start_cmd(message: Message, state: FSMContext):
+async def start_cmd(message: Message, state: FSMContext) -> None:
     remember_user(message)
     await state.clear()
     await message.answer(
-        "Tilni tanlang / Выберите язык:\n\n"
-        f"🆔 TG ID avtomatik olindi / TG ID получен автоматически: <code>{message.from_user.id}</code>",
-        reply_markup=language_kb()
+        f"{TEXTS['uz']['choose_lang']} / {TEXTS['ru']['choose_lang']}\n\n"
+        f"🆔 TG ID avtomatik olindi: <code>{message.from_user.id}</code>",
+        reply_markup=language_kb(),
     )
 
 
-@router.message(F.text.in_(["🇺🇿 O‘zbekcha", "🇷🇺 Русский"]))
-async def choose_language(message: Message, state: FSMContext):
+@router.message(F.text.in_(["Uz O'zbekcha", "Ru Русский"]))
+async def set_language(message: Message) -> None:
     remember_user(message)
-    set_lang(message.from_user.id, "uz" if "O‘zbekcha" in message.text else "ru")
-    await state.clear()
-    await message.answer(
-        tr(message.from_user.id, "lang_set") + "\n\n" + tr(message.from_user.id, "welcome"),
-        reply_markup=main_menu(message.from_user.id)
-    )
-
-
-@router.message(Command("admin"))
-async def admin_cmd(message: Message, state: FSMContext):
-    remember_user(message)
-    await state.clear()
-    if not is_admin(message):
-        await message.answer(tr(message.from_user.id, "admin_only"))
-        return
-    await message.answer(tr(message.from_user.id, "admin_panel"), reply_markup=admin_menu(message.from_user.id))
-
-
-@router.message(F.text.func(lambda x: x in ["👨‍💼 Admin", "👨‍💼 Админ"]))
-async def admin_menu_open(message: Message, state: FSMContext):
-    await admin_cmd(message, state)
-
-
-@router.message(F.text.func(lambda x: x in ["🏠 Oddiy menyu", "🏠 Обычное меню"]))
-async def normal_menu_back(message: Message, state: FSMContext):
-    await state.clear()
+    users = load_users()
+    uid = str(message.from_user.id)
+    users.setdefault(uid, {})
+    users[uid]["lang"] = "uz" if message.text == "Uz O'zbekcha" else "ru"
+    save_users(users)
     await message.answer(tr(message.from_user.id, "welcome"), reply_markup=main_menu(message.from_user.id))
 
 
-@router.message(F.text.func(lambda x: x in ["📚 Kitoblar", "📚 Книги"]))
-async def list_books(message: Message):
+@router.message(F.text.in_([TEXTS["uz"]["books"], TEXTS["ru"]["books"], TEXTS["uz"]["order"], TEXTS["ru"]["order"]]))
+async def show_books(message: Message) -> None:
     remember_user(message)
     books = load_books()
     if not books:
-        await message.answer(tr(message.from_user.id, "no_books"))
+        await message.answer(tr(message.from_user.id, "book_empty"))
         return
     await message.answer(tr(message.from_user.id, "choose_book"))
     for book in books:
-        caption = f"📚 <b>{book['name']}</b>\n💰 {book['price']} so‘m"
-        if book.get("photo_file_id"):
-            await message.answer_photo(photo=book["photo_file_id"], caption=caption, reply_markup=buy_inline_kb(book["id"], message.from_user.id))
+        caption = (
+            f"📚 <b>{book['name']}</b>\n"
+            f"💰 {book['price']} so'm\n\n"
+            f"{book.get('desc', '')}"
+        )
+        photo = book.get("photo", "").strip()
+        if photo and Path(photo).exists():
+            await message.answer_photo(FSInputFile(photo), caption=caption, reply_markup=buy_inline_kb(book["id"], message.from_user.id))
+        elif photo:
+            await message.answer_photo(photo=photo, caption=caption, reply_markup=buy_inline_kb(book["id"], message.from_user.id))
         else:
             await message.answer(caption, reply_markup=buy_inline_kb(book["id"], message.from_user.id))
 
 
-@router.message(F.text.func(lambda x: x in ["🛒 Buyurtma berish", "🛒 Заказать"]))
-async def order_entry(message: Message):
-    if not load_books():
-        await message.answer(tr(message.from_user.id, "order_need_books"))
-        return
-    await list_books(message)
-
-
 @router.callback_query(F.data.startswith("buy:"))
-async def buy_callback(callback: CallbackQuery, state: FSMContext):
-    book_id = int(callback.data.split(":")[1])
-    book = next((b for b in load_books() if b["id"] == book_id), None)
-    if not book:
-        await callback.answer("Book not found", show_alert=True)
+async def buy_book(call: CallbackQuery, state: FSMContext) -> None:
+    remember_user(call.message)
+    try:
+        book_id = int(call.data.split(":")[1])
+    except Exception:
+        await call.answer("Xato", show_alert=True)
         return
-    await state.set_state(OrderState.waiting_name)
+
+    books = load_books()
+    book = next((b for b in books if b["id"] == book_id), None)
+    if not book:
+        await call.answer("Kitob topilmadi", show_alert=True)
+        return
+
     await state.update_data(book_id=book_id)
-    await callback.message.answer(tr(callback.from_user.id, "enter_name"), reply_markup=ReplyKeyboardRemove())
-    await callback.answer()
+    await state.set_state(OrderState.waiting_name)
+    await call.message.answer(tr(call.from_user.id, "enter_name"), reply_markup=ReplyKeyboardRemove())
+    await call.answer()
 
 
 @router.message(OrderState.waiting_name)
-async def order_name(message: Message, state: FSMContext):
-    await state.update_data(customer_name=message.text.strip())
+async def order_name(message: Message, state: FSMContext) -> None:
+    await state.update_data(customer_name=(message.text or "").strip())
     await state.set_state(OrderState.waiting_phone)
-    prompt = "Telefon raqamingizni pastdagi tugma orqali yuboring:" if get_lang(message.from_user.id) == "uz" else "Отправьте номер телефона кнопкой ниже:"
-    await message.answer(prompt, reply_markup=contact_request_kb(message.from_user.id))
+    await message.answer(tr(message.from_user.id, "send_phone"), reply_markup=contact_request_kb(message.from_user.id))
 
 
 @router.message(OrderState.waiting_phone, F.contact)
-async def order_phone(message: Message, state: FSMContext):
+async def order_phone(message: Message, state: FSMContext) -> None:
     await state.update_data(phone=message.contact.phone_number)
     await state.set_state(OrderState.waiting_location)
-    prompt = "Joylashuvingizni pastdagi tugma orqali yuboring:" if get_lang(message.from_user.id) == "uz" else "Отправьте вашу локацию кнопкой ниже:"
-    await message.answer(prompt, reply_markup=location_request_kb(message.from_user.id))
+    await message.answer(tr(message.from_user.id, "send_location"), reply_markup=location_request_kb(message.from_user.id))
 
 
 @router.message(OrderState.waiting_phone)
-async def order_phone_wrong(message: Message):
-    prompt = "Iltimos, telefon raqamni pastdagi tugma orqali yuboring." if get_lang(message.from_user.id) == "uz" else "Пожалуйста, отправьте номер телефона кнопкой ниже."
-    await message.answer(prompt, reply_markup=contact_request_kb(message.from_user.id))
+async def order_phone_wrong(message: Message) -> None:
+    await message.answer(tr(message.from_user.id, "phone_wrong"), reply_markup=contact_request_kb(message.from_user.id))
 
 
 @router.message(OrderState.waiting_location, F.location)
-async def order_location(message: Message, state: FSMContext):
-    await state.update_data(
-        location_lat=message.location.latitude,
-        location_lon=message.location.longitude,
-    )
+async def order_location(message: Message, state: FSMContext) -> None:
+    await state.update_data(location_lat=message.location.latitude, location_lon=message.location.longitude)
     await state.set_state(OrderState.waiting_payment)
     await message.answer(tr(message.from_user.id, "choose_payment"), reply_markup=payment_choice_kb(message.from_user.id))
 
 
 @router.message(OrderState.waiting_location)
-async def order_location_wrong(message: Message):
-    prompt = "Iltimos, joylashuvni pastdagi tugma orqali yuboring." if get_lang(message.from_user.id) == "uz" else "Пожалуйста, отправьте локацию кнопкой ниже."
-    await message.answer(prompt, reply_markup=location_request_kb(message.from_user.id))
+async def order_location_wrong(message: Message) -> None:
+    await message.answer(tr(message.from_user.id, "location_wrong"), reply_markup=location_request_kb(message.from_user.id))
 
 
 @router.message(OrderState.waiting_payment)
-async def order_payment(message: Message, state: FSMContext):
-    if message.text not in [tr(message.from_user.id, "payme"), tr(message.from_user.id, "cash")]:
-        await message.answer(tr(message.from_user.id, "choose_payment"), reply_markup=payment_choice_kb(message.from_user.id))
-        return
-
+async def order_payment(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
-    book = next((b for b in load_books() if b["id"] == data.get("book_id")), None)
+    books = load_books()
+    book = next((b for b in books if b["id"] == data.get("book_id")), None)
     if not book:
         await state.clear()
-        await message.answer(tr(message.from_user.id, "start_over"), reply_markup=main_menu(message.from_user.id))
+        await message.answer("Kitob topilmadi.", reply_markup=main_menu(message.from_user.id))
         return
 
-    payment_type = "Payme" if "Payme" in message.text else ("Naqd" if get_lang(message.from_user.id) == "uz" else "Наличные")
+    payment_type = "Payme" if "Payme" in (message.text or "") else ("Naqd" if get_lang(message.from_user.id) == "uz" else "Наличные")
     latitude = data.get("location_lat")
     longitude = data.get("location_lon")
     location_url = f"https://maps.google.com/?q={latitude},{longitude}" if latitude is not None and longitude is not None else ""
@@ -476,11 +405,13 @@ async def order_payment(message: Message, state: FSMContext):
         "location_lon": longitude,
         "location_url": location_url,
     }
+
     orders = load_orders()
     orders.append(order)
     save_orders(orders)
 
     username_text = f"@{message.from_user.username}" if message.from_user.username else "no_username"
+    location_line = f"\n📍 Lokatsiya / Локация: <a href='{location_url}'>Google Maps</a>" if location_url else ""
     admin_text = (
         f"📦 <b>Yangi buyurtma / Новый заказ</b>\n\n"
         f"📚 Kitob / Книга: <b>{book['name']}</b>\n"
@@ -489,163 +420,95 @@ async def order_payment(message: Message, state: FSMContext):
         f"👤 Ism / Имя: <b>{data.get('customer_name', '')}</b>\n"
         f"📞 Telefon / Телефон: <b>{data.get('phone', '')}</b>\n"
         f"🆔 TG ID: <code>{message.from_user.id}</code>\n"
-        f"👤 Username: {username_text}\n"
-        f"📍 Lokatsiya / Локация: <a href=\"{location_url}\">Google Maps</a>" if location_url else
-        f"📦 <b>Yangi buyurtma / Новый заказ</b>\n\n"
-        f"📚 Kitob / Книга: <b>{book['name']}</b>\n"
-        f"💰 Narx / Цена: <b>{book['price']} so‘m</b>\n"
-        f"💳 To‘lov / Оплата: <b>{payment_type}</b>\n"
-        f"👤 Ism / Имя: <b>{data.get('customer_name', '')}</b>\n"
-        f"📞 Telefon / Телефон: <b>{data.get('phone', '')}</b>\n"
-        f"🆔 TG ID: <code>{message.from_user.id}</code>\n"
         f"👤 Username: {username_text}"
+        f"{location_line}"
     )
+
+    # Bot ichiga ham
+    await message.answer(admin_text)
+    # Shaxsiy admin chatga ham
     try:
         await bot.send_message(chat_id=ADMIN_ID, text=admin_text)
     except Exception:
-        logging.exception("Admin username ga buyurtma yuborilmadi")
+        logging.exception("Admin ID ga buyurtma yuborilmadi")
 
-    if "Payme" in message.text:
-        await message.answer(tr(message.from_user.id, "payme_info"))
-    await message.answer(tr(message.from_user.id, "order_confirmed"), reply_markup=main_menu(message.from_user.id))
+    await message.answer(tr(message.from_user.id, "order_saved"), reply_markup=main_menu(message.from_user.id))
     await state.clear()
 
 
-@router.message(F.text.func(lambda x: x in ["💳 To‘lov", "💳 Оплата"]))
-async def payment_info(message: Message):
-    await message.answer(tr(message.from_user.id, "payment_info"))
+@router.message(F.text.in_([TEXTS["uz"]["payment"], TEXTS["ru"]["payment"]]))
+async def payment_info(message: Message) -> None:
+    await message.answer(tr(message.from_user.id, "payment_text"))
 
 
-@router.message(F.text.func(lambda x: x in ["🚚 Yetkazib berish", "🚚 Доставка"]))
-async def delivery_info(message: Message):
-    await message.answer(tr(message.from_user.id, "delivery_info"))
+@router.message(F.text.in_([TEXTS["uz"]["delivery"], TEXTS["ru"]["delivery"]]))
+async def delivery_info(message: Message) -> None:
+    await message.answer(tr(message.from_user.id, "delivery_text"))
 
 
-@router.message(F.text.func(lambda x: x in ["📩 Murojaat", "📩 Связаться"]))
-async def contact_start(message: Message, state: FSMContext):
-    await state.set_state(ContactState.waiting_message)
-    await message.answer(tr(message.from_user.id, "contact_prompt"), reply_markup=ReplyKeyboardRemove())
-
-
-@router.message(ContactState.waiting_message)
-async def contact_send(message: Message, state: FSMContext):
-    text = (
-        f"📩 <b>Murojaat / Обращение</b>\n\n"
-        f"👤 {message.from_user.full_name}\n"
-        f"🆔 @{message.from_user.username or 'no_username'}\n\n"
-        f"{message.text}"
-    )
+@router.message(F.text.in_([TEXTS["uz"]["contact"], TEXTS["ru"]["contact"]]))
+async def contact_info(message: Message) -> None:
+    text = tr(message.from_user.id, "contact_text", admin=ADMIN_USERNAME, card=PAYMENT_CARD, holder=CARD_HOLDER)
+    await message.answer(text)
     try:
-        await bot.send_message(chat_id=ADMIN_ID, text=text)
+        await bot.send_message(chat_id=ADMIN_ID, text=f"☎️ Murojaat / Обращение\n\n🆔 {message.from_user.id}\n👤 @{message.from_user.username or 'no_username'}")
     except Exception:
-        logging.exception("Admin username ga murojaat yuborilmadi")
-    await message.answer(tr(message.from_user.id, "contact_sent"), reply_markup=main_menu(message.from_user.id))
-    await state.clear()
+        logging.exception("Admin ID ga murojaat yuborilmadi")
 
 
-@router.message(F.text.func(lambda x: x in ["➕ Kitob qo‘shish", "➕ Добавить книгу"]))
-async def add_book_start(message: Message, state: FSMContext):
+@router.message(F.text.in_([TEXTS["uz"]["admin"], TEXTS["ru"]["admin"]]))
+async def admin_panel(message: Message) -> None:
     if not is_admin(message):
-        await message.answer(tr(message.from_user.id, "admin_only"))
+        await message.answer(tr(message.from_user.id, "admin_not_allowed"))
         return
-    await state.set_state(AddBookState.waiting_name)
-    await message.answer(tr(message.from_user.id, "send_book_name"), reply_markup=ReplyKeyboardRemove())
+    await message.answer(tr(message.from_user.id, "admin_panel"), reply_markup=admin_menu(message.from_user.id))
 
 
-@router.message(AddBookState.waiting_name)
-async def add_book_name(message: Message, state: FSMContext):
-    await state.update_data(book_name=message.text.strip())
-    await state.set_state(AddBookState.waiting_price)
-    await message.answer(tr(message.from_user.id, "send_book_price"))
+@router.message(F.text.in_([TEXTS["uz"]["ordinary_menu"], TEXTS["ru"]["ordinary_menu"]]))
+async def ordinary_menu(message: Message) -> None:
+    await message.answer(tr(message.from_user.id, "welcome"), reply_markup=main_menu(message.from_user.id))
 
 
-@router.message(AddBookState.waiting_price)
-async def add_book_price(message: Message, state: FSMContext):
-    raw = message.text.strip().replace(" ", "")
-    if not raw.isdigit():
-        await message.answer(tr(message.from_user.id, "bad_price"))
-        return
-    await state.update_data(book_price=int(raw))
-    await state.set_state(AddBookState.waiting_photo)
-    await message.answer(tr(message.from_user.id, "send_book_photo"))
-
-
-@router.message(AddBookState.waiting_photo, Command("skip"))
-async def add_book_skip_photo(message: Message, state: FSMContext):
-    data = await state.get_data()
-    books = load_books()
-    new_id = max([b["id"] for b in books], default=0) + 1
-    books.append({"id": new_id, "name": data["book_name"], "price": data["book_price"], "photo_file_id": None})
-    save_books(books)
-    await state.clear()
-    await message.answer(tr(message.from_user.id, "book_saved"), reply_markup=admin_menu(message.from_user.id))
-
-
-@router.message(AddBookState.waiting_photo, F.photo)
-async def add_book_photo(message: Message, state: FSMContext):
-    data = await state.get_data()
-    books = load_books()
-    new_id = max([b["id"] for b in books], default=0) + 1
-    books.append({"id": new_id, "name": data["book_name"], "price": data["book_price"], "photo_file_id": message.photo[-1].file_id})
-    save_books(books)
-    await state.clear()
-    await message.answer(tr(message.from_user.id, "book_saved"), reply_markup=admin_menu(message.from_user.id))
-
-
-@router.message(AddBookState.waiting_photo)
-async def add_book_photo_invalid(message: Message):
-    await message.answer("Rasm yuboring yoki /skip yozing." if get_lang(message.from_user.id) == "uz" else "Отправьте фото или напишите /skip.")
-
-
-@router.message(F.text.func(lambda x: x in ["📚 Kitoblar ro‘yxati", "📚 Список книг"]))
-async def admin_book_list(message: Message):
+@router.message(F.text.in_([TEXTS["uz"]["stats"], TEXTS["ru"]["stats"]]))
+async def admin_stats(message: Message) -> None:
     if not is_admin(message):
-        await message.answer(tr(message.from_user.id, "admin_only"))
+        await message.answer(tr(message.from_user.id, "admin_not_allowed"))
+        return
+    users_count = len(load_users())
+    books_count = len(load_books())
+    orders_count = len(load_orders())
+    await message.answer(
+        tr(message.from_user.id, "stats_text", users=users_count, books=books_count, orders=orders_count)
+    )
+
+
+@router.message(F.text.in_([TEXTS["uz"]["book_list"], TEXTS["ru"]["book_list"]]))
+async def admin_book_list(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer(tr(message.from_user.id, "admin_not_allowed"))
         return
     books = load_books()
     if not books:
-        await message.answer(tr(message.from_user.id, "no_books"))
+        await message.answer(tr(message.from_user.id, "book_empty"))
         return
-    await message.answer("\n".join([f"{b['id']}. {b['name']} — {b['price']} so‘m" for b in books]))
+    lines = []
+    for b in books:
+        lines.append(f"{b['id']}. {b['name']} | {b['price']} so'm")
+    await message.answer("\n".join(lines))
 
 
-@router.message(F.text.func(lambda x: x in ["🗑 Kitob o‘chirish", "🗑 Удалить книгу"]))
-async def delete_book_prompt(message: Message):
+@router.message(F.text.in_([TEXTS["uz"]["orders"], TEXTS["ru"]["orders"]]))
+async def admin_orders(message: Message) -> None:
     if not is_admin(message):
-        await message.answer(tr(message.from_user.id, "admin_only"))
-        return
-    books = load_books()
-    if not books:
-        await message.answer(tr(message.from_user.id, "no_books"))
-        return
-    kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text=f"{b['name']} ({b['price']})", callback_data=f"del:{b['id']}")] for b in books])
-    await message.answer(tr(message.from_user.id, "choose_delete_book"), reply_markup=kb)
-
-
-@router.callback_query(F.data.startswith("del:"))
-async def delete_book_callback(callback: CallbackQuery):
-    if (callback.from_user.username or "").lstrip("@").lower() != ADMIN_USERNAME.lower():
-        await callback.answer("Not allowed", show_alert=True)
-        return
-    book_id = int(callback.data.split(":")[1])
-    books = [b for b in load_books() if b["id"] != book_id]
-    save_books(books)
-    await callback.message.answer(tr(callback.from_user.id, "book_deleted"), reply_markup=admin_menu(callback.from_user.id))
-    await callback.answer()
-
-
-@router.message(F.text.func(lambda x: x in ["📦 Buyurtmalar", "📦 Заказы"]))
-async def admin_orders(message: Message):
-    if not is_admin(message):
-        await message.answer(tr(message.from_user.id, "admin_only"))
+        await message.answer(tr(message.from_user.id, "admin_not_allowed"))
         return
     orders = load_orders()
     if not orders:
-        await message.answer(tr(message.from_user.id, "no_orders"))
+        await message.answer("Buyurtmalar yo'q.")
         return
-    parts = []
+    parts: List[str] = []
     for i, o in enumerate(orders[-20:], start=1):
-        username_text = f"@{o['username']}" if o.get('username') else "no_username"
+        username_text = f"@{o['username']}" if o.get("username") else "no_username"
         location_text = o.get("location_url") or (
             f"https://maps.google.com/?q={o.get('location_lat')},{o.get('location_lon')}"
             if o.get("location_lat") is not None and o.get("location_lon") is not None else "yo'q"
@@ -659,27 +522,107 @@ async def admin_orders(message: Message):
     await message.answer("\n\n".join(parts))
 
 
-@router.message(F.text.func(lambda x: x in ["📊 Statistika", "📊 Статистика"]))
-async def admin_stats(message: Message):
+@router.message(F.text.in_([TEXTS["uz"]["add_book"], TEXTS["ru"]["add_book"]]))
+async def add_book_start(message: Message, state: FSMContext) -> None:
     if not is_admin(message):
-        await message.answer(tr(message.from_user.id, "admin_only"))
+        await message.answer(tr(message.from_user.id, "admin_not_allowed"))
         return
-    await message.answer(
-        tr(message.from_user.id, "stats_text", users=len(load_users()), books=len(load_books()), orders=len(load_orders()))
+    await state.set_state(AddBookState.waiting_name)
+    await message.answer(tr(message.from_user.id, "enter_book_name"), reply_markup=ReplyKeyboardRemove())
+
+
+@router.message(AddBookState.waiting_name)
+async def add_book_name(message: Message, state: FSMContext) -> None:
+    await state.update_data(name=(message.text or "").strip())
+    await state.set_state(AddBookState.waiting_price)
+    await message.answer(tr(message.from_user.id, "enter_book_price"))
+
+
+@router.message(AddBookState.waiting_price)
+async def add_book_price(message: Message, state: FSMContext) -> None:
+    price = "".join(ch for ch in (message.text or "") if ch.isdigit())
+    if not price:
+        await message.answer(tr(message.from_user.id, "enter_book_price"))
+        return
+    await state.update_data(price=price)
+    await state.set_state(AddBookState.waiting_desc)
+    await message.answer(tr(message.from_user.id, "enter_book_desc"))
+
+
+@router.message(AddBookState.waiting_desc)
+async def add_book_desc(message: Message, state: FSMContext) -> None:
+    await state.update_data(desc=(message.text or "").strip())
+    await state.set_state(AddBookState.waiting_photo)
+    await message.answer(tr(message.from_user.id, "enter_book_photo"))
+
+
+@router.message(AddBookState.waiting_photo, F.photo)
+async def add_book_photo(message: Message, state: FSMContext) -> None:
+    data = await state.get_data()
+    books = load_books()
+    new_id = max([b.get("id", 0) for b in books], default=0) + 1
+
+    photo_dir = BASE_DIR / "uploads"
+    photo_dir.mkdir(exist_ok=True)
+    file_path = photo_dir / f"book_{new_id}.jpg"
+    await bot.download(message.photo[-1], destination=file_path)
+
+    books.append(
+        {
+            "id": new_id,
+            "name": data.get("name", ""),
+            "price": data.get("price", ""),
+            "desc": data.get("desc", ""),
+            "photo": str(file_path),
+        }
     )
+    save_books(books)
+    await state.clear()
+    await message.answer(tr(message.from_user.id, "book_added"), reply_markup=admin_menu(message.from_user.id))
 
 
-@router.message()
-async def fallback(message: Message):
-    remember_user(message)
-    lang = get_lang(message.from_user.id)
-    if lang not in ("uz", "ru"):
-        await message.answer("Tilni tanlang / Выберите язык:", reply_markup=language_kb())
+@router.message(AddBookState.waiting_photo)
+async def add_book_photo_wrong(message: Message) -> None:
+    await message.answer("Rasm yuboring.")
+
+
+@router.message(F.text.in_([TEXTS["uz"]["delete_book"], TEXTS["ru"]["delete_book"]]))
+async def delete_book_menu(message: Message) -> None:
+    if not is_admin(message):
+        await message.answer(tr(message.from_user.id, "admin_not_allowed"))
         return
-    await message.answer(tr(message.from_user.id, "welcome"), reply_markup=main_menu(message.from_user.id))
+    books = load_books()
+    if not books:
+        await message.answer(tr(message.from_user.id, "book_empty"))
+        return
+    kb = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text=f"{b['name']} ({b['price']})", callback_data=f"del:{b['id']}")]
+            for b in books
+        ]
+    )
+    await message.answer(tr(message.from_user.id, "choose_delete_book"), reply_markup=kb)
 
 
-async def main():
+@router.callback_query(F.data.startswith("del:"))
+async def delete_book(call: CallbackQuery) -> None:
+    if not is_admin(call.message):
+        await call.answer("No admin", show_alert=True)
+        return
+    try:
+        book_id = int(call.data.split(":")[1])
+    except Exception:
+        await call.answer("Xato", show_alert=True)
+        return
+
+    books = load_books()
+    new_books = [b for b in books if b["id"] != book_id]
+    save_books(new_books)
+    await call.message.answer(tr(call.from_user.id, "book_deleted"))
+    await call.answer()
+
+
+async def main() -> None:
     await dp.start_polling(bot)
 
 
