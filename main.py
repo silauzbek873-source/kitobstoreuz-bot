@@ -280,19 +280,19 @@ def payment_choice_kb(user_id: int):
     )
 
 
-def phone_request_kb(user_id: int):
+def contact_request_kb(user_id: int):
+    text = "📱 Telefon raqam yuborish" if get_lang(user_id) == "uz" else "📱 Отправить номер телефона"
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=tr(user_id, "enter_phone"), request_contact=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True
+        keyboard=[[KeyboardButton(text=text, request_contact=True)]],
+        resize_keyboard=True, one_time_keyboard=True
     )
 
 
 def location_request_kb(user_id: int):
+    text = "📍 Joylashuvni yuborish" if get_lang(user_id) == "uz" else "📍 Отправить локацию"
     return ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text=("📍 Joylashuvni yuborish" if get_lang(user_id) == "uz" else "📍 Отправить локацию"), request_location=True)]],
-        resize_keyboard=True,
-        one_time_keyboard=True
+        keyboard=[[KeyboardButton(text=text, request_location=True)]],
+        resize_keyboard=True, one_time_keyboard=True
     )
 
 
@@ -316,6 +316,7 @@ class OrderState(StatesGroup):
     waiting_name = State()
     waiting_phone = State()
     waiting_location = State()
+    waiting_payment = State()
 
 
 router = Router()
@@ -329,9 +330,8 @@ async def start_cmd(message: Message, state: FSMContext):
     remember_user(message)
     await state.clear()
     await message.answer(
-        f"🆔 Telegram ID avtomatik olindi: <code>{message.from_user.id}</code>\n"
-        f"👤 Username: @{message.from_user.username or 'no_username'}\n\n"
-        "Tilni tanlang / Выберите язык:",
+        "Tilni tanlang / Выберите язык:\n\n"
+        f"🆔 TG ID avtomatik olindi / TG ID получен автоматически: <code>{message.from_user.id}</code>",
         reply_markup=language_kb()
     )
 
@@ -409,24 +409,46 @@ async def buy_callback(callback: CallbackQuery, state: FSMContext):
 async def order_name(message: Message, state: FSMContext):
     await state.update_data(customer_name=message.text.strip())
     await state.set_state(OrderState.waiting_phone)
-    await message.answer(tr(message.from_user.id, "enter_phone"), reply_markup=phone_request_kb(message.from_user.id))
+    prompt = "Telefon raqamingizni pastdagi tugma orqali yuboring:" if get_lang(message.from_user.id) == "uz" else "Отправьте номер телефона кнопкой ниже:"
+    await message.answer(prompt, reply_markup=contact_request_kb(message.from_user.id))
 
 
 @router.message(OrderState.waiting_phone, F.contact)
-async def order_phone_contact(message: Message, state: FSMContext):
+async def order_phone(message: Message, state: FSMContext):
     await state.update_data(phone=message.contact.phone_number)
     await state.set_state(OrderState.waiting_location)
-    prompt = "📍 Joylashuvingizni yuboring:" if get_lang(message.from_user.id) == "uz" else "📍 Отправьте вашу локацию:"
+    prompt = "Joylashuvingizni pastdagi tugma orqali yuboring:" if get_lang(message.from_user.id) == "uz" else "Отправьте вашу локацию кнопкой ниже:"
     await message.answer(prompt, reply_markup=location_request_kb(message.from_user.id))
 
 
 @router.message(OrderState.waiting_phone)
 async def order_phone_wrong(message: Message):
-    await message.answer(tr(message.from_user.id, "enter_phone"), reply_markup=phone_request_kb(message.from_user.id))
+    prompt = "Iltimos, telefon raqamni pastdagi tugma orqali yuboring." if get_lang(message.from_user.id) == "uz" else "Пожалуйста, отправьте номер телефона кнопкой ниже."
+    await message.answer(prompt, reply_markup=contact_request_kb(message.from_user.id))
 
 
 @router.message(OrderState.waiting_location, F.location)
 async def order_location(message: Message, state: FSMContext):
+    await state.update_data(
+        location_lat=message.location.latitude,
+        location_lon=message.location.longitude,
+    )
+    await state.set_state(OrderState.waiting_payment)
+    await message.answer(tr(message.from_user.id, "choose_payment"), reply_markup=payment_choice_kb(message.from_user.id))
+
+
+@router.message(OrderState.waiting_location)
+async def order_location_wrong(message: Message):
+    prompt = "Iltimos, joylashuvni pastdagi tugma orqali yuboring." if get_lang(message.from_user.id) == "uz" else "Пожалуйста, отправьте локацию кнопкой ниже."
+    await message.answer(prompt, reply_markup=location_request_kb(message.from_user.id))
+
+
+@router.message(OrderState.waiting_payment)
+async def order_payment(message: Message, state: FSMContext):
+    if message.text not in [tr(message.from_user.id, "payme"), tr(message.from_user.id, "cash")]:
+        await message.answer(tr(message.from_user.id, "choose_payment"), reply_markup=payment_choice_kb(message.from_user.id))
+        return
+
     data = await state.get_data()
     book = next((b for b in load_books() if b["id"] == data.get("book_id")), None)
     if not book:
@@ -434,8 +456,10 @@ async def order_location(message: Message, state: FSMContext):
         await message.answer(tr(message.from_user.id, "start_over"), reply_markup=main_menu(message.from_user.id))
         return
 
-    latitude = message.location.latitude
-    longitude = message.location.longitude
+    payment_type = "Payme" if "Payme" in message.text else ("Naqd" if get_lang(message.from_user.id) == "uz" else "Наличные")
+    latitude = data.get("location_lat")
+    longitude = data.get("location_lon")
+    location_url = f"https://maps.google.com/?q={latitude},{longitude}" if latitude is not None and longitude is not None else ""
 
     order = {
         "user_id": message.from_user.id,
@@ -446,36 +470,44 @@ async def order_location(message: Message, state: FSMContext):
         "phone": data.get("phone", ""),
         "book_name": book["name"],
         "price": book["price"],
-        "location": {"latitude": latitude, "longitude": longitude},
+        "payment": payment_type,
+        "location_lat": latitude,
+        "location_lon": longitude,
+        "location_url": location_url,
     }
     orders = load_orders()
     orders.append(order)
     save_orders(orders)
 
+    username_text = f"@{message.from_user.username}" if message.from_user.username else "no_username"
     admin_text = (
         f"📦 <b>Yangi buyurtma / Новый заказ</b>\n\n"
         f"📚 Kitob / Книга: <b>{book['name']}</b>\n"
         f"💰 Narx / Цена: <b>{book['price']} so‘m</b>\n"
+        f"💳 To‘lov / Оплата: <b>{payment_type}</b>\n"
         f"👤 Ism / Имя: <b>{data.get('customer_name', '')}</b>\n"
         f"📞 Telefon / Телефон: <b>{data.get('phone', '')}</b>\n"
         f"🆔 TG ID: <code>{message.from_user.id}</code>\n"
-        f"👤 Username: @{message.from_user.username or 'no_username'}\n"
-        f"📍 Lokatsiya / Локация: {latitude}, {longitude}\n"
-        f"🗺 Xarita / Карта: https://maps.google.com/?q={latitude},{longitude}"
+        f"👤 Username: {username_text}\n"
+        f"📍 Lokatsiya / Локация: <a href=\"{location_url}\">Google Maps</a>" if location_url else
+        f"📦 <b>Yangi buyurtma / Новый заказ</b>\n\n"
+        f"📚 Kitob / Книга: <b>{book['name']}</b>\n"
+        f"💰 Narx / Цена: <b>{book['price']} so‘m</b>\n"
+        f"💳 To‘lov / Оплата: <b>{payment_type}</b>\n"
+        f"👤 Ism / Имя: <b>{data.get('customer_name', '')}</b>\n"
+        f"📞 Telefon / Телефон: <b>{data.get('phone', '')}</b>\n"
+        f"🆔 TG ID: <code>{message.from_user.id}</code>\n"
+        f"👤 Username: {username_text}"
     )
     try:
         await bot.send_message(chat_id=f"@{ADMIN_USERNAME}", text=admin_text)
     except Exception:
         logging.exception("Admin username ga buyurtma yuborilmadi")
 
+    if "Payme" in message.text:
+        await message.answer(tr(message.from_user.id, "payme_info"))
     await message.answer(tr(message.from_user.id, "order_confirmed"), reply_markup=main_menu(message.from_user.id))
     await state.clear()
-
-
-@router.message(OrderState.waiting_location)
-async def order_location_wrong(message: Message):
-    prompt = "📍 Joylashuvingizni yuboring:" if get_lang(message.from_user.id) == "uz" else "📍 Отправьте вашу локацию:"
-    await message.answer(prompt, reply_markup=location_request_kb(message.from_user.id))
 
 
 @router.message(F.text.func(lambda x: x in ["💳 To‘lov", "💳 Оплата"]))
@@ -612,9 +644,16 @@ async def admin_orders(message: Message):
         return
     parts = []
     for i, o in enumerate(orders[-20:], start=1):
+        username_text = f"@{o['username']}" if o.get('username') else "no_username"
+        location_text = o.get("location_url") or (
+            f"https://maps.google.com/?q={o.get('location_lat')},{o.get('location_lon')}"
+            if o.get("location_lat") is not None and o.get("location_lon") is not None else "yo'q"
+        )
         parts.append(
             f"{i}. 📚 {o['book_name']} | 💰 {o['price']} so‘m | 💳 {o['payment']}\n"
-            f"👤 {o['customer_name']} | 📞 {o['phone']} | @{o['username'] or 'no_username'}"
+            f"👤 {o['customer_name']} | 📞 {o['phone']}\n"
+            f"🆔 {o.get('tg_id', o.get('user_id', ''))} | {username_text}\n"
+            f"📍 {location_text}"
         )
     await message.answer("\n\n".join(parts))
 
